@@ -20,21 +20,6 @@ Track gold farming sessions with detailed statistics, zone tracking, and insuran
 
 ---
 
-### 🛡️ Shadowguard
-Automated room navigation and puzzle solving for Shadowguard dungeon.
-
-- **Status:** Beta (v0.4.x)
-- **Rooms Supported:** Lobby, Bar, Orchard, Armory, Fountain, Belfry, Roof
-- **Features:**
-  - Automatic room detection
-  - Room-specific puzzle automation
-  - Visual indicators (item hue painting)
-  - DEBUG mode for troubleshooting
-
-[📖 Full Documentation](./Shadowguard/README.md)
-
----
-
 ### 🔥 Tomb of Kings (ToK)
 Automate lever pulling and flame activation in Tomb of Kings entrance.
 
