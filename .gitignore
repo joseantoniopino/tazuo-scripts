@@ -1,0 +1,30 @@
+# User-specific configuration files (users must create their own)
+**/config.json
+**/zones.json
+**/sessions.csv
+
+# Logs and debugging
+**/logs/
+**/*.log
+**/dumps/
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+
+# Examples and tests
+examples/
+testing/
+
+# Keep only .example files
+!**/*.example
+!config.json.example
+!zones.json.example
+
+# IDE files
+.vscode/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
