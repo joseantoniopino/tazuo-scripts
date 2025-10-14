@@ -63,10 +63,10 @@ These show the format but are NOT used by the script:
 ## 🎮 How to Use
 
 ### 1. Start Script
-Run the script from TazUO:
-```
-Scripts → Load Script → gold_tracker.py
-```
+Load the script in TazUO:
+- Click **"Legion Script"** in the menu bar (top of window)
+- Select `gold_tracker.py` from the list
+- Script starts automatically
 
 ### 2. Select Zone (Enhanced Interface)
 
