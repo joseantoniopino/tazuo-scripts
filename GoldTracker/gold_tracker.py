@@ -348,53 +348,107 @@ class GoldTracker:
             self.cleanup()
     
     def select_zone(self):
-        """Show zone selection gump and wait for user input"""
+        """Show zone selection gump with dynamic filtering"""
         self.logger.info("ZONE_SELECT", "START", "Showing zone selection gump")
         
-        zones = self.zone_mgr.get_zone_list()
+        # Get zones dict from zone manager
+        zones_dict = self.zone_mgr.zones  # {zone_name: [aliases]}
         
-        if not zones:
+        if not zones_dict:
             self.logger.warning("ZONE_SELECT", "NO_ZONES", "No zones available")
             API.SysMsg("No zones configured. Please add zones to zones.json", 0x21)
             return None
         
-        self.gump_mgr.create_zone_selection_gump(zones)
+        # Create gump with filtering support
+        self.gump_mgr.create_zone_selection_gump(zones_dict)
         
         # Wait for user to click Start button
+        self.logger.debug("ZONE_SELECT", "POLLING_START", "Entering polling loop")
+        
         while not API.StopRequested:
             API.ProcessCallbacks()
             
-            if self.gump_mgr.start_button_clicked:
-                self.logger.debug("ZONE_SELECT", "START_CLICKED", "Start button clicked")
-                
-                # Check if new zone entered
-                new_zone_text = self.gump_mgr.controls["new_zone_input"].Text.strip()
-                if new_zone_text:
-                    self.logger.info("ZONE_SELECT", "NEW_ZONE", f"New zone entered: {new_zone_text}")
-                    self.zone_mgr.add_zone(new_zone_text)
+            # Poll textbox for changes to update filter
+            if "filter_input" in self.gump_mgr.controls:
+                try:
+                    current_text = self.gump_mgr.controls["filter_input"].Text
                     
-                    # Close zone gump
+                    # Log polling activity (only when text changes)
+                    if current_text != self.gump_mgr.last_filter_text:
+                        self.logger.debug("ZONE_SELECT", "TEXT_CHANGED", f"Input changed", {
+                            "old": self.gump_mgr.last_filter_text,
+                            "new": current_text
+                        })
+                        self.gump_mgr.update_zone_filter(current_text)
+                except Exception as e:
+                    self.logger.error("ZONE_SELECT", "POLLING_ERROR", str(e), {
+                        "traceback": traceback.format_exc()
+                    })
+            else:
+                # Log if control missing (once)
+                if not hasattr(self, '_logged_missing_control'):
+                    self.logger.warning("ZONE_SELECT", "NO_INPUT_CONTROL", "filter_input not found", {
+                        "available_controls": list(self.gump_mgr.controls.keys())
+                    })
+                    self._logged_missing_control = True
+            
+            # Check if zone gump was closed and recreate if needed
+            self.gump_mgr.recreate_zone_selection_if_closed()
+            
+            # Check if Start button clicked
+            if self.gump_mgr.start_button_clicked:
+                self.logger.info("ZONE_SELECT", "START_CLICKED", "Start button clicked")
+                
+                # Get selected zone
+                self.logger.debug("ZONE_SELECT", "GETTING_ZONE", "Calling get_selected_zone()")
+                zone_name, exists = self.gump_mgr.get_selected_zone()
+                
+                self.logger.info("ZONE_SELECT", "ZONE_RESULT", f"Zone: '{zone_name}', Exists: {exists}")
+                
+                if not zone_name:
+                    API.SysMsg("Please select a zone or enter a zone name", 0x21)
+                    self.logger.warning("ZONE_SELECT", "NO_SELECTION", "No zone selected - input was empty")
+                    self.gump_mgr.start_button_clicked = False  # Reset flag
+                    API.Pause(0.3)
+                    continue
+                
+                # If zone doesn't exist, ask to create it
+                if not exists:
+                    self.logger.info("ZONE_SELECT", "NEW_ZONE_PROMPT", f"Zone '{zone_name}' not found")
+                    
+                    # Close selection gump
                     if self.gump_mgr.zone_gump:
                         self.gump_mgr.zone_gump.Dispose()
+                        self.gump_mgr.zone_gump = None
                     
-                    return new_zone_text
+                    # Show create zone prompt
+                    confirmed, final_zone_name, aliases = self.gump_mgr.create_new_zone_prompt(zone_name)
+                    
+                    if confirmed:
+                        # Add zone to zones.json (use final name from modal, not original)
+                        self.zone_mgr.add_zone(final_zone_name, aliases)
+                        self.logger.info("ZONE_SELECT", "ZONE_CREATED", 
+                                       f"Created zone: {final_zone_name}, aliases: {aliases}")
+                        API.SysMsg(f"Zone '{final_zone_name}' created successfully", 0x3F)
+                        return final_zone_name
+                    else:
+                        # User cancelled, recreate selection gump
+                        self.logger.info("ZONE_SELECT", "CREATE_CANCELLED", "User cancelled zone creation")
+                        self.gump_mgr.start_button_clicked = False
+                        self.gump_mgr.create_zone_selection_gump(zones_dict)
+                        API.Pause(0.3)
+                        continue
                 
-                # Check which radio button is selected
-                for i, radio in enumerate(self.gump_mgr.controls["zone_radios"]):
-                    if radio.IsChecked:
-                        selected_zone = zones[i]
-                        self.logger.info("ZONE_SELECT", "ZONE_SELECTED", f"Selected: {selected_zone}")
-                        
-                        # Close zone gump
-                        if self.gump_mgr.zone_gump:
-                            self.gump_mgr.zone_gump.Dispose()
-                        
-                        return selected_zone
+                # Zone exists, use it
+                self.logger.info("ZONE_SELECT", "ZONE_SELECTED", f"Selected: {zone_name}")
                 
-                API.SysMsg("Please select a zone or enter a new one", 0x21)
-                self.logger.warning("ZONE_SELECT", "NO_SELECTION", "No zone selected")
+                # Close zone gump
+                if self.gump_mgr.zone_gump:
+                    self.gump_mgr.zone_gump.Dispose()
+                
+                return zone_name
             
-            API.Pause(0.25)
+            API.Pause(0.3)  # Polling interval
         
         return None
     

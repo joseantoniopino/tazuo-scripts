@@ -28,17 +28,30 @@ class GumpManager:
         self.minimized = False
         self.current_zone = None
         
+        # Zone filtering state
+        self.all_zones = {}  # {zone_name: [aliases]}
+        self.filtered_zones = []  # Currently visible zones
+        self.last_filter_text = ""
+        
         if self.debug:
             print("[GumpManager] Initialized")
     
-    def create_zone_selection_gump(self, zones):
-        """Create zone selection gump ONCE"""
+    def create_zone_selection_gump(self, zones_dict):
+        """
+        Create zone selection gump with dynamic filtering
+        zones_dict: {zone_name: [aliases]}
+        """
         try:
             if self.debug:
-                print(f"[GumpManager] Creating zone selection gump with {len(zones)} zones")
+                print(f"[GumpManager] Creating zone selection gump with {len(zones_dict)} zones")
             
-            gump_width = 450
-            gump_height = 350 + (len(zones) * 30)
+            # Store zones and initialize filter
+            self.all_zones = zones_dict
+            self.filtered_zones = list(zones_dict.keys())  # Show all initially
+            
+            # Create gump structure
+            gump_width = 500
+            gump_height = 450  # Fixed height for scrollable area
             self.zone_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
             self.zone_gump.SetRect(0, 0, gump_width, gump_height)
             self.zone_gump.CenterXInViewPort()
@@ -48,39 +61,40 @@ class GumpManager:
             bg = self.api.CreateGumpColorBox(0.9, "#1a1a2e")
             bg.SetRect(0, 0, gump_width, gump_height)
             self.zone_gump.Add(bg)
+            self.controls["background"] = bg
             
-            # Title (centered)
-            title = self.api.CreateGumpLabel("GoldTracker - Select Zone", 0x0481)  # Gold color
-            title.SetPos(gump_width // 2 - 100, 25)
+            # Title
+            title = self.api.CreateGumpLabel("GoldTracker - Select Zone", 0x0481)
+            title.SetPos(gump_width // 2 - 100, 20)
             self.zone_gump.Add(title)
+            self.controls["title"] = title
             
-            # Zone radio buttons
-            y_offset = 60
-            self.controls["zone_radios"] = []
-            for i, zone in enumerate(zones):
-                radio = self.api.CreateGumpRadioButton(zone, group=1, isChecked=(i == 0))
-                radio.SetPos(40, y_offset)
-                self.zone_gump.Add(radio)
-                self.controls["zone_radios"].append(radio)
-                y_offset += 30
+            # Filter textbox (at top)
+            filter_label = self.api.CreateGumpLabel("Type to filter zones, or enter new zone name:", 0x44)
+            filter_label.SetPos(30, 55)
+            self.zone_gump.Add(filter_label)
+            self.controls["filter_label"] = filter_label
             
-            # New zone section
-            new_zone_label = self.api.CreateGumpLabel("Or create new zone:", 0x44)
-            new_zone_label.SetPos(40, y_offset + 20)
-            self.zone_gump.Add(new_zone_label)
+            filter_textbox = self.api.CreateGumpTextBox("", width=380, height=30)
+            filter_textbox.SetPos(30, 80)
+            self.zone_gump.Add(filter_textbox)
+            self.controls["filter_input"] = filter_textbox
             
-            new_zone_textbox = self.api.CreateGumpTextBox("", width=300, height=30)
-            new_zone_textbox.SetPos(40, y_offset + 45)
-            self.zone_gump.Add(new_zone_textbox)
-            self.controls["new_zone_input"] = new_zone_textbox
+            # Scroll area for radio buttons
+            scroll_area = self.api.CreateGumpScrollArea(30, 120, 440, 230)
+            self.zone_gump.Add(scroll_area)
+            self.controls["scroll_area"] = scroll_area
             
-            # Start button with callback
+            # Create initial radio buttons (no selection by default)
+            self._rebuild_zone_list()
+            
+            # Start button
             start_btn = self.api.CreateSimpleButton("Start Session", 150, 35)
-            start_btn.SetPos(125, y_offset + 90)
+            start_btn.SetPos(175, 370)
             self.zone_gump.Add(start_btn)
             self.controls["start_button"] = start_btn
             
-            # Add click callback to start button
+            # Start button callback
             def on_start_click():
                 self.start_button_clicked = True
                 if self.debug:
@@ -88,13 +102,20 @@ class GumpManager:
             
             self.api.AddControlOnClick(start_btn, on_start_click)
             
+            # Instructions label
+            instructions = self.api.CreateGumpLabel("List filters as you type. Click zone to auto-fill.", 0x3F)
+            instructions.SetPos(65, 410)
+            self.zone_gump.Add(instructions)
+            self.controls["instructions"] = instructions
+            
             self.api.AddGump(self.zone_gump)
             
             if self.debug:
-                print("[GumpManager] Zone selection gump created")
+                print("[GumpManager] Zone selection gump created with filtering")
             
             if self.logger:
-                self.logger.info("GUMP", "ZONE_SELECTION_CREATED", f"Created gump with {len(zones)} zones")
+                self.logger.info("GUMP", "ZONE_SELECTION_CREATED", 
+                               f"Created gump with {len(zones_dict)} zones")
             
             return True
             
@@ -108,6 +129,569 @@ class GumpManager:
                     "traceback": traceback.format_exc()
                 })
             return False
+    
+    def _filter_zones(self, query):
+        """
+        Filter zones by query (searches in zone name and aliases)
+        Returns list of matching zone names
+        """
+        if self.logger:
+            self.logger.debug("GUMP", "FILTER_START", f"Query: '{query}'", {
+                "total_zones": len(self.all_zones)
+            })
+        
+        if not query or query.strip() == "":
+            all_zones_list = list(self.all_zones.keys())
+            if self.logger:
+                self.logger.debug("GUMP", "FILTER_EMPTY", f"Empty query - showing all {len(all_zones_list)} zones")
+            return all_zones_list
+        
+        query_lower = query.lower().strip()
+        matches = []
+        
+        for zone_name, aliases in self.all_zones.items():
+            # Search in zone name
+            if query_lower in zone_name.lower():
+                matches.append(zone_name)
+                if self.logger:
+                    self.logger.debug("GUMP", "FILTER_MATCH_NAME", f"Zone: {zone_name}", {
+                        "query": query_lower
+                    })
+                continue
+            
+            # Search in aliases
+            if any(query_lower in alias.lower() for alias in aliases):
+                matches.append(zone_name)
+                if self.logger:
+                    self.logger.debug("GUMP", "FILTER_MATCH_ALIAS", f"Zone: {zone_name}", {
+                        "query": query_lower,
+                        "aliases": aliases
+                    })
+        
+        if self.logger:
+            self.logger.debug("GUMP", "FILTER_COMPLETE", f"Found {len(matches)} matches", {
+                "query": query,
+                "matches": matches[:5]  # First 5
+            })
+        
+        return matches
+    
+    def _rebuild_zone_list(self):
+        """
+        Build radio buttons in scroll area for initial gump creation
+        Called only during create_zone_selection_gump
+        """
+        try:
+            scroll_area = self.controls.get("scroll_area")
+            if not scroll_area:
+                if self.debug:
+                    print("[GumpManager] No scroll area found for rebuild")
+                return
+            
+            # Add radio buttons for filtered zones
+            self.controls["zone_radios"] = []
+            y_pos = 5
+            
+            if self.logger:
+                self.logger.debug("GUMP", "CREATE_RADIOS_START", f"Creating {len(self.filtered_zones)} radio buttons", {
+                    "zones": self.filtered_zones[:5]  # First 5
+                })
+            
+            for i, zone_name in enumerate(self.filtered_zones):
+                # Create radio button (NO default selection)
+                radio = self.api.CreateGumpRadioButton(zone_name, group=1, isChecked=False)
+                radio.SetPos(10, y_pos)
+                scroll_area.Add(radio)
+                
+                # Store radio with zone name
+                self.controls["zone_radios"].append({
+                    "control": radio,
+                    "zone_name": zone_name
+                })
+                
+                if self.logger and i < 3:  # Log first 3
+                    self.logger.debug("GUMP", "RADIO_CREATED", f"Radio {i}: {zone_name}", {
+                        "y_pos": y_pos
+                    })
+                
+                # Add callback to fill textbox when clicked
+                def make_radio_callback(zone):
+                    def on_radio_click():
+                        if self.logger:
+                            self.logger.debug("GUMP", "RADIO_CLICKED", f"Zone: {zone}")
+                        
+                        # Fill textbox with zone name
+                        if "filter_input" in self.controls:
+                            try:
+                                # Try SetText() method first
+                                if hasattr(self.controls["filter_input"], "SetText"):
+                                    self.controls["filter_input"].SetText(zone)
+                                    if self.logger:
+                                        self.logger.debug("GUMP", "INPUT_FILLED", f"Input filled with SetText(): {zone}")
+                                # Try Clear + type simulation
+                                elif hasattr(self.controls["filter_input"], "Clear"):
+                                    self.controls["filter_input"].Clear()
+                                    # Simulate typing each character
+                                    for char in zone:
+                                        self.controls["filter_input"].OnTextInput(char)
+                                    if self.logger:
+                                        self.logger.debug("GUMP", "INPUT_FILLED", f"Input filled with OnTextInput(): {zone}")
+                                else:
+                                    if self.logger:
+                                        self.logger.warning("GUMP", "NO_SET_METHOD", f"No SetText or Clear method found. Available methods: {dir(self.controls['filter_input'])}")
+                            except Exception as e:
+                                if self.logger:
+                                    self.logger.error("GUMP", "INPUT_FILL_ERROR", str(e), {
+                                        "zone": zone,
+                                        "traceback": traceback.format_exc()
+                                    })
+                        else:
+                            if self.logger:
+                                self.logger.error("GUMP", "NO_INPUT_CONTROL", "filter_input not found in controls")
+                    return on_radio_click
+                
+                self.api.AddControlOnClick(radio, make_radio_callback(zone_name))
+                
+                y_pos += 25
+            
+            if self.logger:
+                self.logger.debug("GUMP", "CREATE_RADIOS_COMPLETE", f"Created {len(self.filtered_zones)} radio buttons in scroll area")
+            
+            if self.debug:
+                print(f"[GumpManager] Built zone list: {len(self.filtered_zones)} zones")
+        
+        except Exception as e:
+            if self.debug:
+                print(f"[GumpManager] ERROR building zone list: {e}")
+                traceback.print_exc()
+    
+    def update_zone_filter(self, query):
+        """
+        Update zone filter and rebuild radio button list
+        Clears and recreates scroll area content (NOT the whole gump)
+        """
+        try:
+            if self.logger:
+                self.logger.debug("GUMP", "FILTER_UPDATE_START", f"Query: '{query}'", {
+                    "old_filter": self.last_filter_text,
+                    "old_filtered_count": len(self.filtered_zones)
+                })
+            
+            # Filter zones
+            old_filtered = self.filtered_zones[:]
+            self.filtered_zones = self._filter_zones(query)
+            
+            # Store last filter
+            self.last_filter_text = query
+            
+            if self.logger:
+                self.logger.debug("GUMP", "FILTER_UPDATE_COMPLETE", f"Matches: {len(self.filtered_zones)}", {
+                    "query": query,
+                    "old_count": len(old_filtered),
+                    "new_count": len(self.filtered_zones),
+                    "filtered_zones": self.filtered_zones[:5]  # First 5 for debugging
+                })
+            
+            # Rebuild the radio button list in scroll area
+            if "scroll_area" in self.controls:
+                if self.logger:
+                    self.logger.debug("GUMP", "REBUILD_SCROLL_START", "Clearing and rebuilding scroll area")
+                
+                # Clear scroll area
+                self.controls["scroll_area"].Clear()
+                self.controls["zone_radios"] = []
+                
+                # Rebuild radio buttons
+                y_pos = 0
+                for i, zone_name in enumerate(self.filtered_zones):
+                    # Create radio button
+                    radio = self.api.CreateGumpRadioButton(zone_name, group=1, isChecked=False)
+                    radio.SetPos(10, y_pos)
+                    self.controls["scroll_area"].Add(radio)
+                    
+                    # Store radio with zone name
+                    self.controls["zone_radios"].append({
+                        "control": radio,
+                        "zone_name": zone_name
+                    })
+                    
+                    # Add callback to fill textbox when clicked
+                    def make_radio_callback(zone):
+                        def on_radio_click():
+                            if self.logger:
+                                self.logger.debug("GUMP", "RADIO_CLICKED", f"Zone: {zone}")
+                            
+                            # Fill textbox with zone name
+                            if "filter_input" in self.controls:
+                                try:
+                                    # Try SetText() method first
+                                    if hasattr(self.controls["filter_input"], "SetText"):
+                                        self.controls["filter_input"].SetText(zone)
+                                        if self.logger:
+                                            self.logger.debug("GUMP", "INPUT_FILLED", f"Input filled with SetText(): {zone}")
+                                    # Try Clear + type simulation
+                                    elif hasattr(self.controls["filter_input"], "Clear"):
+                                        self.controls["filter_input"].Clear()
+                                        # Simulate typing each character
+                                        for char in zone:
+                                            self.controls["filter_input"].OnTextInput(char)
+                                        if self.logger:
+                                            self.logger.debug("GUMP", "INPUT_FILLED", f"Input filled with OnTextInput(): {zone}")
+                                    else:
+                                        if self.logger:
+                                            self.logger.warning("GUMP", "NO_SET_METHOD", f"No SetText or Clear method found. Available methods: {dir(self.controls['filter_input'])}")
+                                except Exception as e:
+                                    if self.logger:
+                                        self.logger.error("GUMP", "INPUT_FILL_ERROR", str(e), {
+                                            "zone": zone,
+                                            "traceback": traceback.format_exc()
+                                        })
+                            else:
+                                if self.logger:
+                                    self.logger.error("GUMP", "NO_INPUT_CONTROL", "filter_input not found in controls")
+                        return on_radio_click
+                    
+                    self.api.AddControlOnClick(radio, make_radio_callback(zone_name))
+                    
+                    y_pos += 25
+                
+                if self.logger:
+                    self.logger.debug("GUMP", "REBUILD_SCROLL_COMPLETE", f"Rebuilt scroll area with {len(self.filtered_zones)} radios")
+        
+        except Exception as e:
+            if self.debug:
+                print(f"[GumpManager] ERROR updating filter: {e}")
+                traceback.print_exc()
+            
+            if self.logger:
+                self.logger.error("GUMP", "FILTER_UPDATE_ERROR", str(e), {
+                    "traceback": traceback.format_exc()
+                })
+    
+    def get_selected_zone(self):
+        """
+        Get the selected zone from UI
+        ONLY reads from textbox input - radio buttons just fill the textbox
+        Returns: (zone_name, exists_in_zones_json)
+        """
+        if self.logger:
+            self.logger.debug("GUMP", "GET_ZONE_START", "Checking selected zone")
+        
+        # Check if filter_input control exists
+        if "filter_input" not in self.controls:
+            if self.logger:
+                self.logger.error("GUMP", "NO_INPUT_CONTROL", "filter_input not in controls", {
+                    "available_controls": list(self.controls.keys())
+                })
+            return (None, False)
+        
+        # Get text from textbox
+        try:
+            text = self.controls["filter_input"].Text.strip()
+        except Exception as e:
+            if self.logger:
+                self.logger.error("GUMP", "INPUT_READ_ERROR", str(e), {
+                    "traceback": traceback.format_exc()
+                })
+            return (None, False)
+        
+        if self.logger:
+            self.logger.debug("GUMP", "INPUT_TEXT_READ", f"Input text: '{text}'", {
+                "length": len(text),
+                "is_empty": not text
+            })
+        
+        if not text:
+            # Empty input - NO zone selected
+            if self.logger:
+                self.logger.debug("GUMP", "EMPTY_INPUT", "No zone selected (empty input)")
+            return (None, False)
+        
+        # Check if it's an exact match (case-insensitive)
+        for zone_name in self.all_zones.keys():
+            if text.lower() == zone_name.lower():
+                if self.logger:
+                    self.logger.info("GUMP", "EXACT_MATCH", f"Found: {zone_name}", {
+                        "input": text
+                    })
+                return (zone_name, True)
+        
+        # Check if it's an alias match
+        for zone_name, aliases in self.all_zones.items():
+            if text.lower() in [a.lower() for a in aliases]:
+                if self.logger:
+                    self.logger.info("GUMP", "ALIAS_MATCH", f"Found: {zone_name}", {
+                        "input": text,
+                        "matched_alias": text
+                    })
+                return (zone_name, True)
+        
+        # Not found - new zone
+        if self.logger:
+            self.logger.info("GUMP", "NEW_ZONE", f"Zone not found: '{text}'", {
+                "will_prompt_create": True
+            })
+        return (text, False)
+    
+    def _is_modal_gump_open(self):
+        """Check if modal gump is still open"""
+        try:
+            if not hasattr(self, 'modal_gump') or not self.modal_gump:
+                return False
+            
+            if hasattr(self.modal_gump, 'IsDisposed'):
+                return not self.modal_gump.IsDisposed
+            
+            try:
+                _ = self.modal_gump.X
+                return True
+            except:
+                return False
+        except:
+            return False
+    
+    def _recreate_modal_if_closed(self):
+        """Recreate modal gump if it was closed"""
+        if not hasattr(self, 'modal_gump') or not hasattr(self, 'modal_zone_name'):
+            return False
+        
+        if not self._is_modal_gump_open():
+            if self.logger:
+                self.logger.warning("GUMP", "MODAL_CLOSED", "Modal gump was closed, recreating")
+            
+            if self.debug:
+                print("[GumpManager] Modal gump closed, recreating...")
+            
+            # Store alias text before recreating
+            saved_alias_text = ""
+            try:
+                if hasattr(self, 'modal_alias_textbox') and self.modal_alias_textbox:
+                    saved_alias_text = self.modal_alias_textbox.Text
+            except:
+                pass
+            
+            # Recreate modal gump (same layout as create_new_zone_prompt)
+            zone_name = self.modal_zone_name
+            modal_width = 450
+            modal_height = 260
+            modal_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
+            modal_gump.SetRect(0, 0, modal_width, modal_height)
+            modal_gump.CenterXInViewPort()
+            modal_gump.CenterYInViewPort()
+            
+            # Background
+            bg = self.api.CreateGumpColorBox(0.95, "#2a2a3e")
+            bg.SetRect(0, 0, modal_width, modal_height)
+            modal_gump.Add(bg)
+            
+            # Title
+            title = self.api.CreateGumpLabel("Create New Zone", 0x0481)
+            title.SetPos(modal_width // 2 - 70, 20)
+            modal_gump.Add(title)
+            
+            # Instructions (same layout as create_new_zone_prompt, no redundant zone label)
+            instr1 = self.api.CreateGumpLabel("Add search aliases (comma-separated):", 0x44)
+            instr1.SetPos(30, 60)
+            modal_gump.Add(instr1)
+            
+            instr2 = self.api.CreateGumpLabel("First alias will be the zone name.", 0x35)
+            instr2.SetPos(30, 80)
+            modal_gump.Add(instr2)
+            
+            instr3 = self.api.CreateGumpLabel("You can type any of these to find this zone.", 0x35)
+            instr3.SetPos(30, 100)
+            modal_gump.Add(instr3)
+            
+            instr4 = self.api.CreateGumpLabel("Example: zone name, alias1, alias2, alias3", 0x35)
+            instr4.SetPos(30, 120)
+            modal_gump.Add(instr4)
+            
+            # Alias textbox (restore previous text if any)
+            alias_textbox = self.api.CreateGumpTextBox(saved_alias_text, width=390, height=30)
+            alias_textbox.SetPos(30, 150)
+            modal_gump.Add(alias_textbox)
+            
+            # Buttons (adjusted position after removing zone label)
+            create_btn = self.api.CreateSimpleButton("Create", 120, 35)
+            create_btn.SetPos(100, 200)
+            modal_gump.Add(create_btn)
+            
+            cancel_btn = self.api.CreateSimpleButton("Cancel", 120, 35)
+            cancel_btn.SetPos(230, 200)
+            modal_gump.Add(cancel_btn)
+            
+            # Button callbacks (reuse existing flags)
+            create_clicked = self.modal_create_clicked
+            cancel_clicked = self.modal_cancel_clicked
+            
+            def on_create():
+                create_clicked[0] = True
+                if self.debug:
+                    print("[GumpManager] Create zone confirmed")
+            
+            def on_cancel():
+                cancel_clicked[0] = True
+                if self.debug:
+                    print("[GumpManager] Create zone cancelled")
+            
+            self.api.AddControlOnClick(create_btn, on_create)
+            self.api.AddControlOnClick(cancel_btn, on_cancel)
+            
+            self.api.AddGump(modal_gump)
+            
+            # Update references
+            self.modal_gump = modal_gump
+            self.modal_alias_textbox = alias_textbox
+            
+            if self.logger:
+                self.logger.debug("GUMP", "MODAL_RECREATED", "Modal gump recreated successfully")
+            
+            return True
+        
+        return False
+    
+    def create_new_zone_prompt(self, zone_name):
+        """
+        Create a modal gump to ask for aliases when creating a new zone
+        Returns: (confirmed, alias_list)
+        """
+        try:
+            if self.debug:
+                print(f"[GumpManager] Creating new zone prompt for: {zone_name}")
+            
+            # Create modal gump (increased height for additional instruction line)
+            modal_width = 450
+            modal_height = 260
+            modal_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
+            modal_gump.SetRect(0, 0, modal_width, modal_height)
+            modal_gump.CenterXInViewPort()
+            modal_gump.CenterYInViewPort()
+            
+            # Background
+            bg = self.api.CreateGumpColorBox(0.95, "#2a2a3e")
+            bg.SetRect(0, 0, modal_width, modal_height)
+            modal_gump.Add(bg)
+            
+            # Title
+            title = self.api.CreateGumpLabel("Create New Zone", 0x0481)
+            title.SetPos(modal_width // 2 - 70, 20)
+            modal_gump.Add(title)
+            
+            # Instructions (removed redundant zone name label)
+            instr1 = self.api.CreateGumpLabel("Add search aliases (comma-separated):", 0x44)
+            instr1.SetPos(30, 60)
+            modal_gump.Add(instr1)
+            
+            instr2 = self.api.CreateGumpLabel("First alias will be the zone name.", 0x35)
+            instr2.SetPos(30, 80)
+            modal_gump.Add(instr2)
+            
+            instr3 = self.api.CreateGumpLabel("You can type any of these to find this zone.", 0x35)
+            instr3.SetPos(30, 100)
+            modal_gump.Add(instr3)
+            
+            instr4 = self.api.CreateGumpLabel("Example: zone name, alias1, alias2, alias3", 0x35)
+            instr4.SetPos(30, 120)
+            modal_gump.Add(instr4)
+            
+            # Alias textbox - use zone_name as first alias suggestion
+            alias_textbox = self.api.CreateGumpTextBox(zone_name, width=390, height=30)
+            alias_textbox.SetPos(30, 150)
+            modal_gump.Add(alias_textbox)
+            
+            # Buttons (adjusted position after removing zone label)
+            create_btn = self.api.CreateSimpleButton("Create", 120, 35)
+            create_btn.SetPos(100, 200)
+            modal_gump.Add(create_btn)
+            
+            cancel_btn = self.api.CreateSimpleButton("Cancel", 120, 35)
+            cancel_btn.SetPos(230, 200)
+            modal_gump.Add(cancel_btn)
+            
+            # Button click flags
+            create_clicked = [False]  # Use list for closure
+            cancel_clicked = [False]
+            
+            def on_create():
+                create_clicked[0] = True
+                if self.debug:
+                    print("[GumpManager] Create zone confirmed")
+            
+            def on_cancel():
+                cancel_clicked[0] = True
+                if self.debug:
+                    print("[GumpManager] Create zone cancelled")
+            
+            self.api.AddControlOnClick(create_btn, on_create)
+            self.api.AddControlOnClick(cancel_btn, on_cancel)
+            
+            self.api.AddGump(modal_gump)
+            
+            # Store modal gump reference for recreation if closed
+            self.modal_gump = modal_gump
+            self.modal_zone_name = zone_name
+            self.modal_create_clicked = create_clicked
+            self.modal_cancel_clicked = cancel_clicked
+            self.modal_alias_textbox = alias_textbox
+            
+            # Wait for user action
+            if self.debug:
+                print("[GumpManager] Waiting for user action on new zone prompt...")
+            
+            while not create_clicked[0] and not cancel_clicked[0]:
+                self.api.ProcessCallbacks()
+                
+                # Check if modal was closed and recreate if needed (only if no decision made)
+                if not create_clicked[0] and not cancel_clicked[0]:
+                    self._recreate_modal_if_closed()
+                
+                self.api.Pause(0.1)
+            
+            # Get result
+            confirmed = create_clicked[0]
+            alias_text = alias_textbox.Text.strip() if confirmed else ""
+            
+            # Parse aliases
+            aliases = []
+            final_zone_name = zone_name  # Default to original name
+            
+            if alias_text:
+                aliases = [a.strip() for a in alias_text.split(",") if a.strip()]
+                # First alias becomes the zone name (user may have changed it)
+                if aliases:
+                    final_zone_name = aliases[0]
+            
+            # Close modal (use stored reference if modal was recreated)
+            if self.modal_gump:
+                self.modal_gump.Dispose()
+                if self.logger:
+                    self.logger.debug("GUMP", "MODAL_DISPOSED", "Modal closed via stored reference")
+            elif modal_gump:
+                modal_gump.Dispose()
+                if self.logger:
+                    self.logger.debug("GUMP", "MODAL_DISPOSED", "Modal closed via local reference")
+            
+            # Clean up modal references
+            self.modal_gump = None
+            self.modal_zone_name = None
+            self.modal_create_clicked = None
+            self.modal_cancel_clicked = None
+            self.modal_alias_textbox = None
+            
+            if self.debug:
+                print(f"[GumpManager] New zone prompt result: confirmed={confirmed}, zone={final_zone_name}, aliases={aliases}")
+            
+            if self.logger:
+                self.logger.info("GUMP", "MODAL_CLOSED_COMPLETE", 
+                               f"Modal finished: confirmed={confirmed}, zone={final_zone_name}, aliases={aliases}")
+            
+            return (confirmed, final_zone_name, aliases)
+        
+        except Exception as e:
+            if self.debug:
+                print(f"[GumpManager] ERROR in new zone prompt: {e}")
+                traceback.print_exc()
+            return (False, [])
     
     def create_session_gump(self, zone, use_stored_position=False):
         """Create session gump (only the full one initially)"""
@@ -505,6 +1089,52 @@ class GumpManager:
                 use_stored = hasattr(self, 'gump_x') and hasattr(self, 'gump_y')
                 self.create_session_gump(self.current_zone, use_stored_position=use_stored)
                 return True
+        
+        return False
+    
+    def is_zone_gump_open(self):
+        """Check if zone selection gump is still open"""
+        try:
+            if not self.zone_gump:
+                return False
+            
+            if hasattr(self.zone_gump, 'IsDisposed'):
+                return not self.zone_gump.IsDisposed
+            
+            try:
+                _ = self.zone_gump.X
+                return True
+            except:
+                return False
+        except:
+            return False
+    
+    def recreate_zone_selection_if_closed(self):
+        """Recreate zone selection gump if it was closed"""
+        if not self.all_zones:
+            return False
+        
+        if not self.is_zone_gump_open():
+            if self.logger:
+                self.logger.warning("GUMP", "ZONE_GUMP_CLOSED", "Zone selection gump was closed, recreating")
+            
+            if self.debug:
+                print("[GumpManager] Zone selection gump closed, recreating...")
+            
+            # Recreate zone gump
+            self.create_zone_selection_gump(self.all_zones)
+            
+            # Restore filter text if it was set
+            if self.last_filter_text and "filter_input" in self.controls:
+                try:
+                    self.controls["filter_input"].SetText(self.last_filter_text)
+                    if self.logger:
+                        self.logger.debug("GUMP", "FILTER_RESTORED", f"Restored filter: '{self.last_filter_text}'")
+                except Exception as e:
+                    if self.logger:
+                        self.logger.error("GUMP", "FILTER_RESTORE_FAILED", str(e))
+            
+            return True
         
         return False
     

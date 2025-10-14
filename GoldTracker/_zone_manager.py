@@ -110,8 +110,12 @@ class ZoneManager:
             print(f"[ZoneManager] No match found for '{user_input}'")
         return None
     
-    def add_zone(self, zone_name):
-        """Add new zone with initial alias"""
+    def add_zone(self, zone_name, aliases=None):
+        """
+        Add new zone with optional aliases
+        zone_name: Canonical zone name
+        aliases: List of alias strings (optional)
+        """
         if not zone_name or not zone_name.strip():
             if self.debug:
                 print(f"[ZoneManager] ERROR: Empty zone name")
@@ -125,11 +129,19 @@ class ZoneManager:
                 print(f"[ZoneManager] Zone '{zone_name}' already exists")
             return True
         
-        # Add new zone with lowercase alias
-        self.zones[zone_name] = [zone_name.lower()]
+        # Create alias list
+        if aliases and isinstance(aliases, list):
+            # User provided aliases
+            alias_list = [a.strip().lower() for a in aliases if a.strip()]
+        else:
+            # Default: lowercase zone name
+            alias_list = [zone_name.lower()]
+        
+        # Add new zone
+        self.zones[zone_name] = alias_list
         
         if self.debug:
-            print(f"[ZoneManager] Added new zone: {zone_name}")
+            print(f"[ZoneManager] Added new zone: {zone_name}, aliases: {alias_list}")
         
         return self.save_zones()
     
