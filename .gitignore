@@ -12,8 +12,7 @@
 **/__pycache__/
 **/*.pyc
 
-# Examples and tests
-examples/
+# Testing folders (not examples/)
 testing/
 
 # Keep only .example files
