@@ -9,7 +9,7 @@ import json
 import time
 import re
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ============================================================================
 # EARLY LOGGING - Capture ALL errors before anything else
@@ -22,9 +22,9 @@ def early_log(msg):
     """Log errors even before logger is initialized"""
     try:
         os.makedirs(log_dir, exist_ok=True)
-        logfile = os.path.join(log_dir, f"gold_tracker-{datetime.utcnow().strftime('%Y%m%d')}.log")
+        logfile = os.path.join(log_dir, f"gold_tracker-{datetime.now(timezone.utc).strftime('%Y%m%d')}.log")
         with open(logfile, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.utcnow().isoformat()}Z - {msg}\n")
+            f.write(f"{datetime.now(timezone.utc).isoformat()}Z - {msg}\n")
     except:
         pass  # Can't log, nothing we can do
 
@@ -62,7 +62,7 @@ except Exception as e:
     early_log(traceback.format_exc())
     if 'TAZUO_API' in globals() and TAZUO_API:
         try:
-            API.SysMsg(f"GoldTracker FATAL ERROR - Check logs/gold_tracker-{datetime.utcnow().strftime('%Y%m%d')}.log", 0x21)
+            API.SysMsg(f"GoldTracker FATAL ERROR - Check logs/gold_tracker-{datetime.now(timezone.utc).strftime('%Y%m%d')}.log", 0x21)
         except:
             pass
     raise
@@ -119,12 +119,12 @@ class ScriptLogger:
                 "level": level,
                 "context": context,
                 "details": details or {},
-                "ts": datetime.utcnow().isoformat() + "Z"
+                "ts": datetime.now(timezone.utc).isoformat() + "Z"
             }
             
             logfile = os.path.join(
                 self.log_dir,
-                f"{self.script_name}-{datetime.utcnow().strftime('%Y%m%d')}.log"
+                f"{self.script_name}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.log"
             )
             
             with open(logfile, "a", encoding="utf-8") as f:
@@ -192,6 +192,7 @@ class GoldTracker:
         self.cached_insurance_cost = 0
         self.last_gold_check = time.time()
         self.last_autosave = time.time()
+        self.last_death_time = 0  # Protection against duplicate death events
         
         self.logger.info("INIT", "START", "GoldTracker initialized", {
             "version": self.version,
@@ -477,6 +478,12 @@ class GoldTracker:
         # Register death callback
         API.Events.OnPlayerDeath(self.on_player_death)
         self.logger.info("SESSION_INIT", "DEATH_EVENT", "Registered death event callback")
+        API.SysMsg("Death event callback registered - waiting for death event", 0x3F)
+        
+        # Register hits changed callback (for debugging resurrection)
+        API.Events.OnPlayerHitsChanged(self.on_player_hits_changed)
+        self.logger.info("SESSION_INIT", "HITS_EVENT", "Registered hits changed event callback")
+        API.SysMsg("Hits changed callback registered - monitoring HP changes", 0x3F)
         
         # Create session gump
         self.gump_mgr.create_session_gump(zone)
@@ -671,36 +678,144 @@ class GoldTracker:
                 API.SysMsg("Invalid input. Using 0 gp.", 0x21)
                 return 0
     
+    def on_player_hits_changed(self, new_hits):
+        """
+        Callback triggered when player HP changes
+        Used for debugging death/resurrection events
+        """
+        # Log IMMEDIATELY that callback was triggered
+        self.logger.info("HITS", "CALLBACK_TRIGGERED", f"OnPlayerHitsChanged fired with new_hits={new_hits}")
+        
+        try:
+            # Only log significant changes or when near death/resurrection
+            if new_hits == 0 or new_hits <= 10 or (hasattr(self, '_last_logged_hits') and abs(new_hits - self._last_logged_hits) > 20):
+                player_state = {
+                    "new_hits": new_hits,
+                    "max_hits": API.Player.HitsMax,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+                
+                self.logger.info("HITS", "CHANGED", f"Player HP changed to {new_hits}/{API.Player.HitsMax}", player_state)
+                
+                # Log to screen if HP reaches 0 or comes back from 0
+                if new_hits == 0:
+                    API.SysMsg(f"HP REACHED ZERO", 0x21)
+                elif hasattr(self, '_last_logged_hits') and self._last_logged_hits == 0 and new_hits > 0:
+                    API.SysMsg(f"HP RESTORED FROM ZERO to {new_hits}", 0x3F)
+                
+                self._last_logged_hits = new_hits
+        except Exception as e:
+            self.logger.error("HITS", "ERROR", str(e), {
+                "traceback": traceback.format_exc()
+            })
+    
     def on_player_death(self, player_serial):
         """
         Callback triggered when player dies
         Uses cached insurance cost from session start
+        
+        DEBUG MODE: Logs extensive player state information to debug resurrection issues
         """
-        self.logger.info("DEATH", "DETECTED", "Player death event triggered", {
-            "player_serial": player_serial
+        # Log IMMEDIATELY that callback was triggered (before any other logic)
+        early_log(f">>> OnPlayerDeath CALLBACK TRIGGERED - Serial: {hex(player_serial)}")
+        
+        # CRITICAL: Check if player is actually dead (HP=0) or this is resurrection event (HP>0)
+        current_hp = API.Player.Hits
+        early_log(f">>> Player HP at OnPlayerDeath: {current_hp}")
+        
+        if current_hp > 0:
+            # This is resurrection event, not actual death - IGNORE IT
+            self.logger.warning("DEATH", "RESURRECTION_EVENT", f"OnPlayerDeath fired with HP={current_hp} > 0 - resurrection event, ignoring")
+            API.SysMsg(f"Death event ignored (resurrection, HP={current_hp})", 0x44)
+            return
+        
+        current_time = time.time()
+        early_log(f">>> About to capture player state")
+        
+        # EXTENSIVE LOGGING - Capture ALL player state (only for real deaths with HP=0)
+        try:
+            player_state = {
+                "player_serial": hex(player_serial),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "time_since_last": f"{current_time - self.last_death_time:.2f}s" if hasattr(self, 'last_death_time') else "N/A",
+                # Player vitals
+                "player_hits": current_hp,
+                "player_max_hits": API.Player.HitsMax,
+                "player_stamina": API.Player.Stamina,
+                "player_max_stamina": API.Player.StaminaMax,
+                "player_mana": API.Player.Mana,
+                "player_max_mana": API.Player.ManaMax,
+                # Position
+                "x": API.Player.X,
+                "y": API.Player.Y,
+                "z": API.Player.Z,
+                # Other properties
+                "notoriety": API.Player.Notoriety,
+                "name": API.Player.Name
+            }
+            early_log(f">>> Player state captured successfully")
+            self.logger.info("DEATH", "EVENT_TRIGGERED", "OnPlayerDeath event fired - FULL STATE CAPTURE", player_state)
+        except Exception as e:
+            early_log(f">>> ERROR capturing player state: {e}")
+            self.logger.error("DEATH", "STATE_ERROR", f"Failed to capture state: {e}", {"traceback": traceback.format_exc()})
+            # Continue anyway - death counting is more important than full state capture
+        
+        # Log to screen for immediate visibility
+        early_log(f">>> About to check screen message")
+        API.SysMsg(f"DEATH EVENT: HP={current_hp}", 0x44)
+        early_log(f">>> Screen message sent")
+        
+        # Check if this is a duplicate event (within 10 seconds)
+        early_log(f">>> About to check duplicate")
+        if hasattr(self, 'last_death_time'):
+            time_since_last = current_time - self.last_death_time
+            if time_since_last < 10:
+                self.logger.warning("DEATH", "DUPLICATE_IGNORED", f"Ignoring duplicate death event (fired {time_since_last:.2f}s after previous)", {
+                    "player_serial": hex(player_serial),
+                    "protection_threshold": "10 seconds",
+                    "player_state_at_duplicate": player_state
+                })
+                API.SysMsg(f"Death event IGNORED (duplicate within {time_since_last:.1f}s)", 0x21)
+                return
+        
+        # Update last death time
+        early_log(f">>> Updating last_death_time")
+        self.last_death_time = current_time
+        early_log(f">>> last_death_time updated to {current_time}")
+        
+        early_log(f">>> About to log PROCESSING")
+        self.logger.info("DEATH", "PROCESSING", "Processing death event", {
+            "player_serial": hex(player_serial)
         })
         
         # Get current session data
+        early_log(f">>> Getting current session")
         session = self.session_mgr.current_session
         if not session:
+            early_log(f">>> ERROR: No active session")
             self.logger.warning("DEATH", "NO_SESSION", "Death detected but no active session")
             return
         
+        early_log(f">>> Session found, deaths before: {session['deaths']}")
         # Increment death count
         session["deaths"] += 1
+        early_log(f">>> Deaths after increment: {session['deaths']}")
         
         self.logger.info("DEATH", "COUNT_UPDATED", f"Death count: {session['deaths']}", {
             "insurance_cost_per_death": self.cached_insurance_cost,
             "total_deaths": session["deaths"]
         })
+        API.SysMsg(f"DEATH COUNTED: Total deaths = {session['deaths']}", 0x21)
         
         # Update session data
         self.session_mgr.update_session_data(deaths=session["deaths"])
         
         # Notify user
-        API.SysMsg("Death #{} - Insurance: {} gp".format(
+        API.SysMsg("Death #{} - Insurance: {} gp (HP: {}/{})".format(
             session["deaths"],
-            self.cached_insurance_cost
+            self.cached_insurance_cost,
+            player_state['player_hits'],
+            player_state['player_max_hits']
         ), 0x21)
     
     def update_gold_tracking(self):
@@ -817,7 +932,7 @@ if TAZUO_API:
         early_log(f"FATAL ERROR: {e}")
         early_log(traceback.format_exc())
         try:
-            API.SysMsg(f"GoldTracker ERROR - Check logs/gold_tracker-{datetime.utcnow().strftime('%Y%m%d')}.log", 0x21)
+            API.SysMsg(f"GoldTracker ERROR - Check logs/gold_tracker-{datetime.now(timezone.utc).strftime('%Y%m%d')}.log", 0x21)
         except:
             pass
         if script and script.logger:
