@@ -516,6 +516,15 @@ class GoldTracker:
         self.session_mgr.update_session_data(insurance_cost=self.cached_insurance_cost)
         self.session_active = True
         
+        # IMPORTANT: Unregister old callbacks first to prevent accumulation
+        # This prevents "Too many callbacks registered!" error
+        try:
+            API.Events.OnPlayerDeath(None)
+            API.Events.OnPlayerHitsChanged(None)
+            self.logger.info("SESSION_INIT", "CALLBACKS_CLEARED", "Cleared any existing callbacks")
+        except Exception as e:
+            self.logger.warning("SESSION_INIT", "CLEAR_WARNING", f"Error clearing callbacks: {e}")
+        
         # Register death callback
         API.Events.OnPlayerDeath(self.on_player_death)
         self.logger.info("SESSION_INIT", "DEATH_EVENT", "Registered death event callback")
@@ -941,6 +950,14 @@ class GoldTracker:
                 self.session_mgr.end_session()
                 API.SysMsg("GoldTracker: Session ended and saved", 0x3F)
                 self.logger.info("CLEANUP", "SESSION_SAVED", "Session finalized and saved")
+            
+            # Unregister callbacks (CRITICAL to prevent "Too many callbacks" error)
+            try:
+                API.Events.OnPlayerDeath(None)
+                API.Events.OnPlayerHitsChanged(None)
+                self.logger.info("CLEANUP", "CALLBACKS_UNREGISTERED", "Death and hits callbacks unregistered")
+            except Exception as e:
+                self.logger.warning("CLEANUP", "CALLBACK_ERROR", f"Error unregistering callbacks: {e}")
             
             # Cleanup gumps
             self.gump_mgr.cleanup()
