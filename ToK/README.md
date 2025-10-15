@@ -57,8 +57,7 @@ Once script stops, the entrance is open. Walk in and enjoy!
 The script uses colored hues to show lever status:
 
 - **Green (🟢)** - Usable lever (not yet pulled)
-- **Red (🔴)** - Used lever (already pulled)
-- **No color** - Unusable lever (wrong name)
+- **No color** - Used lever (wrong name)
 
 **Note:** Colors are client-side only. Other players won't see them.
 
@@ -321,14 +320,14 @@ None currently reported. Script is stable.
 ## 📜 Credits
 
 **Author:** Foruno  
-**Original Concept:** Manual lever puzzle solution (tedious!)  
+**Original Concept:** Manual lever solution (tedious!)  
 **Automation:** Full TazUO Python implementation
 
 ---
 
 ## ⚖️ License
 
-Original work by Foruno for TazUO.  
+Original work by Foruno.  
 Free to use for personal gameplay.
 
 ---

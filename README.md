@@ -19,10 +19,10 @@ Track your farming efficiency across different zones. Monitor gold gains, deaths
 
 ---
 
-### 🗝️ [Tomb of Kings Automation](ToK/) - Lever Puzzle Helper
+### 🗝️ [Tomb of Kings Automation](ToK/) - Lever Helper
 **Version:** 1.0.0
 
-Automates the tedious entrance puzzle at Tomb of Kings. No more manually pulling 12 levers and speaking phrases at flames - let the script handle it while you focus on the dungeon.
+Automates the tedious entrance at Tomb of Kings. No more manually pulling 12 levers and speaking phrases at flames - let the script handle it while you focus on the dungeon.
 
 📖 [Full Documentation](ToK/README.md)
 
