@@ -135,16 +135,9 @@ class GumpManager:
         Filter zones by query (searches in zone name and aliases)
         Returns list of matching zone names
         """
-        if self.logger:
-            self.logger.debug("GUMP", "FILTER_START", f"Query: '{query}'", {
-                "total_zones": len(self.all_zones)
-            })
-        
+        # Only log final result, not every match (reduces spam during typing)
         if not query or query.strip() == "":
-            all_zones_list = list(self.all_zones.keys())
-            if self.logger:
-                self.logger.debug("GUMP", "FILTER_EMPTY", f"Empty query - showing all {len(all_zones_list)} zones")
-            return all_zones_list
+            return list(self.all_zones.keys())
         
         query_lower = query.lower().strip()
         matches = []
@@ -153,25 +146,16 @@ class GumpManager:
             # Search in zone name
             if query_lower in zone_name.lower():
                 matches.append(zone_name)
-                if self.logger:
-                    self.logger.debug("GUMP", "FILTER_MATCH_NAME", f"Zone: {zone_name}", {
-                        "query": query_lower
-                    })
                 continue
             
             # Search in aliases
             if any(query_lower in alias.lower() for alias in aliases):
                 matches.append(zone_name)
-                if self.logger:
-                    self.logger.debug("GUMP", "FILTER_MATCH_ALIAS", f"Zone: {zone_name}", {
-                        "query": query_lower,
-                        "aliases": aliases
-                    })
         
-        if self.logger:
-            self.logger.debug("GUMP", "FILTER_COMPLETE", f"Found {len(matches)} matches", {
-                "query": query,
-                "matches": matches[:5]  # First 5
+        # Only log final result (not every keystroke)
+        if self.logger and len(matches) <= 3:  # Only log when narrowed down
+            self.logger.debug("GUMP", "FILTER_RESULT", f"Query '{query}' → {len(matches)} match(es)", {
+                "matches": matches
             })
         
         return matches
@@ -209,56 +193,30 @@ class GumpManager:
                     "zone_name": zone_name
                 })
                 
-                if self.logger and i < 3:  # Log first 3
-                    self.logger.debug("GUMP", "RADIO_CREATED", f"Radio {i}: {zone_name}", {
-                        "y_pos": y_pos
-                    })
-                
-                # Add callback to fill textbox when clicked
+                # Add callback to fill textbox when clicked (no logging spam)
                 def make_radio_callback(zone):
                     def on_radio_click():
-                        if self.logger:
-                            self.logger.debug("GUMP", "RADIO_CLICKED", f"Zone: {zone}")
-                        
-                        # Fill textbox with zone name
+                        # Fill textbox with zone name (silently)
                         if "filter_input" in self.controls:
                             try:
-                                # Try SetText() method first
                                 if hasattr(self.controls["filter_input"], "SetText"):
                                     self.controls["filter_input"].SetText(zone)
-                                    if self.logger:
-                                        self.logger.debug("GUMP", "INPUT_FILLED", f"Input filled with SetText(): {zone}")
-                                # Try Clear + type simulation
                                 elif hasattr(self.controls["filter_input"], "Clear"):
                                     self.controls["filter_input"].Clear()
-                                    # Simulate typing each character
                                     for char in zone:
                                         self.controls["filter_input"].OnTextInput(char)
-                                    if self.logger:
-                                        self.logger.debug("GUMP", "INPUT_FILLED", f"Input filled with OnTextInput(): {zone}")
-                                else:
-                                    if self.logger:
-                                        self.logger.warning("GUMP", "NO_SET_METHOD", f"No SetText or Clear method found. Available methods: {dir(self.controls['filter_input'])}")
                             except Exception as e:
                                 if self.logger:
-                                    self.logger.error("GUMP", "INPUT_FILL_ERROR", str(e), {
-                                        "zone": zone,
-                                        "traceback": traceback.format_exc()
-                                    })
-                        else:
-                            if self.logger:
-                                self.logger.error("GUMP", "NO_INPUT_CONTROL", "filter_input not found in controls")
+                                    self.logger.error("GUMP", "INPUT_FILL_ERROR", str(e))
                     return on_radio_click
                 
                 self.api.AddControlOnClick(radio, make_radio_callback(zone_name))
                 
                 y_pos += 25
             
-            if self.logger:
-                self.logger.debug("GUMP", "CREATE_RADIOS_COMPLETE", f"Created {len(self.filtered_zones)} radio buttons in scroll area")
-            
-            if self.debug:
-                print(f"[GumpManager] Built zone list: {len(self.filtered_zones)} zones")
+            # Only log if significant (not every rebuild)
+            if self.logger and len(self.filtered_zones) <= 3:
+                self.logger.debug("GUMP", "RADIO_REBUILD", f"Showing {len(self.filtered_zones)} zone(s)")
         
         except Exception as e:
             if self.debug:
@@ -292,12 +250,8 @@ class GumpManager:
                     "filtered_zones": self.filtered_zones[:5]  # First 5 for debugging
                 })
             
-            # Rebuild the radio button list in scroll area
+            # Rebuild the radio button list in scroll area (silently)
             if "scroll_area" in self.controls:
-                if self.logger:
-                    self.logger.debug("GUMP", "REBUILD_SCROLL_START", "Clearing and rebuilding scroll area")
-                
-                # Clear scroll area
                 self.controls["scroll_area"].Clear()
                 self.controls["zone_radios"] = []
                 
@@ -354,9 +308,6 @@ class GumpManager:
                     self.api.AddControlOnClick(radio, make_radio_callback(zone_name))
                     
                     y_pos += 25
-                
-                if self.logger:
-                    self.logger.debug("GUMP", "REBUILD_SCROLL_COMPLETE", f"Rebuilt scroll area with {len(self.filtered_zones)} radios")
         
         except Exception as e:
             if self.debug:
@@ -374,15 +325,10 @@ class GumpManager:
         ONLY reads from textbox input - radio buttons just fill the textbox
         Returns: (zone_name, exists_in_zones_json)
         """
-        if self.logger:
-            self.logger.debug("GUMP", "GET_ZONE_START", "Checking selected zone")
-        
-        # Check if filter_input control exists
+        # Check if filter_input control exists (no log spam)
         if "filter_input" not in self.controls:
             if self.logger:
-                self.logger.error("GUMP", "NO_INPUT_CONTROL", "filter_input not in controls", {
-                    "available_controls": list(self.controls.keys())
-                })
+                self.logger.error("GUMP", "NO_INPUT_CONTROL", "filter_input not in controls")
             return (None, False)
         
         # Get text from textbox
@@ -390,47 +336,29 @@ class GumpManager:
             text = self.controls["filter_input"].Text.strip()
         except Exception as e:
             if self.logger:
-                self.logger.error("GUMP", "INPUT_READ_ERROR", str(e), {
-                    "traceback": traceback.format_exc()
-                })
+                self.logger.error("GUMP", "INPUT_READ_ERROR", str(e))
             return (None, False)
-        
-        if self.logger:
-            self.logger.debug("GUMP", "INPUT_TEXT_READ", f"Input text: '{text}'", {
-                "length": len(text),
-                "is_empty": not text
-            })
         
         if not text:
-            # Empty input - NO zone selected
-            if self.logger:
-                self.logger.debug("GUMP", "EMPTY_INPUT", "No zone selected (empty input)")
             return (None, False)
         
-        # Check if it's an exact match (case-insensitive)
+        # Check exact match (case-insensitive)
         for zone_name in self.all_zones.keys():
             if text.lower() == zone_name.lower():
                 if self.logger:
-                    self.logger.info("GUMP", "EXACT_MATCH", f"Found: {zone_name}", {
-                        "input": text
-                    })
+                    self.logger.info("GUMP", "ZONE_SELECTED", f"Selected: {zone_name}")
                 return (zone_name, True)
         
-        # Check if it's an alias match
+        # Check alias match
         for zone_name, aliases in self.all_zones.items():
             if text.lower() in [a.lower() for a in aliases]:
                 if self.logger:
-                    self.logger.info("GUMP", "ALIAS_MATCH", f"Found: {zone_name}", {
-                        "input": text,
-                        "matched_alias": text
-                    })
+                    self.logger.info("GUMP", "ZONE_SELECTED", f"Selected: {zone_name} (via alias '{text}')")
                 return (zone_name, True)
         
         # Not found - new zone
         if self.logger:
-            self.logger.info("GUMP", "NEW_ZONE", f"Zone not found: '{text}'", {
-                "will_prompt_create": True
-            })
+            self.logger.info("GUMP", "NEW_ZONE", f"New zone: '{text}'")
         return (text, False)
     
     def _is_modal_gump_open(self):

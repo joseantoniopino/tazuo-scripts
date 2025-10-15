@@ -10,6 +10,7 @@ import time
 import re
 import traceback
 from datetime import datetime, timezone
+from functools import wraps
 
 # ============================================================================
 # EARLY LOGGING - Capture ALL errors before anything else
@@ -151,6 +152,51 @@ class ScriptLogger:
 
 
 # ============================================================================
+# LOGGING DECORATORS - Reduce visual noise
+# ============================================================================
+
+def log_method(context, event_prefix):
+    """Decorator to auto-log method execution (entry/exit only)"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if DEBUG and hasattr(self, 'logger'):
+                self.logger.debug(context, f"{event_prefix}_START", f"→ {func.__name__}")
+            try:
+                result = func(self, *args, **kwargs)
+                if DEBUG and hasattr(self, 'logger'):
+                    self.logger.debug(context, f"{event_prefix}_END", f"✓ {func.__name__}")
+                return result
+            except Exception as e:
+                if hasattr(self, 'logger'):
+                    self.logger.error(context, f"{event_prefix}_ERROR", f"✗ {func.__name__}: {e}", 
+                                    {"traceback": traceback.format_exc()})
+                raise
+        return wrapper
+    return decorator
+
+def log_errors_only(context):
+    """Decorator that only logs errors, no entry/exit noise"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as e:
+                if hasattr(self, 'logger'):
+                    self.logger.error(context, "ERROR", f"✗ {func.__name__}: {e}", 
+                                    {"traceback": traceback.format_exc()})
+                raise
+        return wrapper
+    return decorator
+
+
+# ============================================================================
+# MAIN SCRIPT CLASS
+# ============================================================================
+
+
+# ============================================================================
 # GOLDTRACKER MAIN CLASS
 # ============================================================================
 
@@ -181,6 +227,10 @@ class GoldTracker:
             logger=self.logger,
             debug=DEBUG
         )
+        
+        # Log throttling (prevent spam in long sessions)
+        self.last_no_gold_log = 0  # Throttle "no gold" logs
+        self.last_gold_amount = 0  # Track gold changes only
         
         # Session state
         self.session_active = False
@@ -268,15 +318,6 @@ class GoldTracker:
                     API.ProcessCallbacks()
                     
                     # Check button states (using flags set by callbacks)
-                    # DEBUG: Log button states periodically
-                    if DEBUG and int(time.time()) % 5 == 0:
-                        self.logger.debug("MAIN", "BUTTON_FLAGS", "Button states", {
-                            "stop": self.gump_mgr.stop_button_clicked,
-                            "cancel": self.gump_mgr.cancel_button_clicked,
-                            "pause": self.gump_mgr.pause_button_clicked,
-                            "minimize": self.gump_mgr.minimize_button_clicked,
-                            "adjust": self.gump_mgr.adjust_button_clicked
-                        })
                     if self.gump_mgr.stop_button_clicked:
                         self.logger.info("MAIN", "STOP_CLICKED", "Stop button clicked")
                         self.stop_requested = True
@@ -478,17 +519,15 @@ class GoldTracker:
         # Register death callback
         API.Events.OnPlayerDeath(self.on_player_death)
         self.logger.info("SESSION_INIT", "DEATH_EVENT", "Registered death event callback")
-        API.SysMsg("Death event callback registered - waiting for death event", 0x3F)
         
         # Register hits changed callback (for debugging resurrection)
         API.Events.OnPlayerHitsChanged(self.on_player_hits_changed)
         self.logger.info("SESSION_INIT", "HITS_EVENT", "Registered hits changed event callback")
-        API.SysMsg("Hits changed callback registered - monitoring HP changes", 0x3F)
         
         # Create session gump
         self.gump_mgr.create_session_gump(zone)
         
-        API.SysMsg("GoldTracker: Session started in {}".format(zone), 0x3F)
+        API.SysMsg("Session started: {}".format(zone), 0x3F)
         self.logger.info("SESSION_INIT", "COMPLETE", "Session initialization complete")
     
     def scan_backpack_gold(self):
@@ -500,12 +539,18 @@ class GoldTracker:
             )
             
             if not gold_piles:
-                self.logger.debug("GOLD_SCAN", "NO_GOLD", "No gold found in backpack")
+                # Only log "no gold" once every 5 minutes (not every scan)
+                if time.time() - self.last_no_gold_log > 300:
+                    self.logger.debug("GOLD_SCAN", "NO_GOLD", "No gold in backpack (will not log again for 5 min)")
+                    self.last_no_gold_log = time.time()
                 return 0
             
             total_gold = sum(pile.Amount for pile in gold_piles)
             
-            self.logger.debug("GOLD_SCAN", "SUCCESS", f"Found {total_gold} gold in {len(gold_piles)} piles")
+            # Only log gold changes, not every scan
+            if total_gold != self.last_gold_amount:
+                self.logger.debug("GOLD_SCAN", "CHANGED", f"Gold: {self.last_gold_amount} → {total_gold}")
+                self.last_gold_amount = total_gold
             
             return total_gold
         
@@ -696,13 +741,6 @@ class GoldTracker:
                 }
                 
                 self.logger.info("HITS", "CHANGED", f"Player HP changed to {new_hits}/{API.Player.HitsMax}", player_state)
-                
-                # Log to screen if HP reaches 0 or comes back from 0
-                if new_hits == 0:
-                    API.SysMsg(f"HP REACHED ZERO", 0x21)
-                elif hasattr(self, '_last_logged_hits') and self._last_logged_hits == 0 and new_hits > 0:
-                    API.SysMsg(f"HP RESTORED FROM ZERO to {new_hits}", 0x3F)
-                
                 self._last_logged_hits = new_hits
         except Exception as e:
             self.logger.error("HITS", "ERROR", str(e), {
@@ -726,7 +764,6 @@ class GoldTracker:
         if current_hp > 0:
             # This is resurrection event, not actual death - IGNORE IT
             self.logger.warning("DEATH", "RESURRECTION_EVENT", f"OnPlayerDeath fired with HP={current_hp} > 0 - resurrection event, ignoring")
-            API.SysMsg(f"Death event ignored (resurrection, HP={current_hp})", 0x44)
             return
         
         current_time = time.time()
@@ -775,7 +812,6 @@ class GoldTracker:
                     "protection_threshold": "10 seconds",
                     "player_state_at_duplicate": player_state
                 })
-                API.SysMsg(f"Death event IGNORED (duplicate within {time_since_last:.1f}s)", 0x21)
                 return
         
         # Update last death time

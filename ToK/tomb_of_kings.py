@@ -10,7 +10,7 @@
 import os
 import json
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     import API
@@ -77,12 +77,12 @@ class ScriptLogger:
                 "level": level,
                 "context": context,
                 "details": details or {},
-                "ts": datetime.utcnow().isoformat() + "Z"
+                "ts": datetime.now(timezone.utc).isoformat() + "Z"
             }
             
             logfile = os.path.join(
                 self.log_dir, 
-                f"{self.script_name}-{datetime.utcnow().strftime('%Y%m%d')}.log"
+                f"{self.script_name}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.log"
             )
             
             with open(logfile, "a", encoding="utf-8") as f:
@@ -140,13 +140,13 @@ class ShadowguardLogger:
                 "msg": msg,
                 "level": level,
                 "details": details or {},
-                "ts": datetime.utcnow().isoformat() + "Z",
+                "ts": datetime.now(timezone.utc).isoformat() + "Z",
                 "room": room
             }
             
             logfile = os.path.join(
                 self.log_dir, 
-                f"shadowguard-{datetime.utcnow().strftime('%Y%m%d')}.log"
+                f"shadowguard-{datetime.now(timezone.utc).strftime('%Y%m%d')}.log"
             )
             
             with open(logfile, "a", encoding="utf-8") as f:

@@ -6,6 +6,10 @@ A collection of automation scripts for **TazUO** (Ultima Online client). These s
 **Target Client:** TazUO with Python API support  
 **Language:** Python 3.x  
 
+> **⚠️ COMPATIBILITY WARNING:**  
+> These scripts are designed for **TazUO (modern version)** and are **NOT compatible with TazUO Legacy**.  
+> Make sure you're using the latest TazUO client with Python API support.
+
 ---
 
 ## 📦 Available Scripts

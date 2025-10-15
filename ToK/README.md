@@ -5,6 +5,10 @@
 **Author:** Foruno  
 **For:** TazUO (Ultima Online)
 
+> **⚠️ COMPATIBILITY WARNING:**  
+> This script is designed for **TazUO (modern version)** and is **NOT compatible with TazUO Legacy**.  
+> Requires TazUO with Python API support.
+
 ---
 
 ## 📖 Description
