@@ -55,14 +55,6 @@ These files are created automatically on first run and contain your personal dat
 - **`sessions.csv`** - Your farming session history
 - **`logs/`** - Debug logs (when `"debug": true` in config.json)
 
-### Example Files (Included in Repo)
-
-These show the format but are NOT used by the script:
-
-- **`config.json.example`** - Example configuration format
-- **`zones.json.example`** - Example zones format
-
----
 
 ## 🎮 How to Use
 
@@ -222,7 +214,9 @@ Click **Stop** button when finished:
 1. Open `zones.json`
 2. Add new entry:
    ```json
-   "My Dungeon": ["my dungeon", "md", "dungeon", "test"]
+   {
+     "My Dungeon": ["my dungeon", "md", "dungeon", "test"]
+   }
    ```
 3. Save file
 4. Restart script

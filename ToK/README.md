@@ -69,22 +69,23 @@ The script uses colored hues to show lever status:
 
 ## 🔧 Configuration
 
-### No Config File Needed!
+### Auto-Generated Config
 
-This script has **zero configuration**. Just load and run.
+On first run, the script will create a `config.json` file in this folder with default settings. You can edit it and reload the script.
 
-### Customizable Values (Advanced)
-
-If you want to modify behavior, edit these constants in the script:
-
-```python
-# At top of TombOfKings class
-LEVER_GRAPHICS = [4238, 4236]  # Lever graphic IDs
-USE_DISTANCE = 1               # Distance to auto-use (tiles)
-DETECTION_RANGE = 25           # Detection radius (tiles)
+#### Keys
+```json
+{
+  "version": "1.0.0",
+  "debug": false,
+  "use_distance": 1,
+  "detection_range": 25,
+  "hue_green": 68,
+  "hue_red": 33
+}
 ```
 
-**Most users never need to change these.**
+Most users never need to change these values.
 
 ---
 
@@ -94,18 +95,12 @@ If the script doesn't work as expected:
 
 ### Enable Debug Logging
 
-1. Open `tomb_of_kings.py` in text editor
-2. Find (near line 30):
-   ```python
-   DEBUG = False
-   ```
-3. Change to:
-   ```python
-   DEBUG = True
-   ```
-4. Save and reload script
+1. Run the script once to generate `config.json` (if not present)
+2. Open `public/ToK/config.json`
+3. Set `"debug": true`
+4. Save the file and reload the script
 5. Reproduce the issue
-6. Check `ToK/logs/tomb_of_kings-YYYYMMDD.log`
+6. Check `public/ToK/logs/tomb_of_kings-YYYYMMDD.log`
 
 ### What Gets Logged
 
@@ -241,6 +236,7 @@ class TombOfKings:
     
     def cleanup(self):
         # Reset hues, clear state
+        pass
 ```
 
 **Key Principles:**
@@ -271,17 +267,18 @@ class TombOfKings:
 
 ## 📦 Files Created
 
-After first run with debug mode:
+After first run:
 
 ```
 ToK/
 ├── tomb_of_kings.py              # Main script
 ├── README.md                     # This file
-└── logs/                         # Debug logs (if DEBUG=True)
+├── config.json                   # Auto-generated configuration
+└── logs/                         # Debug logs (if "debug": true)
     └── tomb_of_kings-YYYYMMDD.log
 ```
 
-**Note:** No config files created. Script is fully self-contained.
+**Note:** `config.json` is created automatically on first run and stores debug and tuning options.
 
 ---
 
@@ -299,7 +296,7 @@ ToK/
 
 Download latest version from GitHub repository and replace `tomb_of_kings.py` file.
 
-**No config to migrate** - Script has no configuration files.
+Config is auto-generated on first run. If you've customized `config.json`, you can keep it when updating the script.
 
 ---
 
@@ -307,10 +304,11 @@ Download latest version from GitHub repository and replace `tomb_of_kings.py` fi
 
 ### Reporting Issues
 
-1. Enable debug mode (`DEBUG = True`)
-2. Reproduce the issue
-3. Get log file from `ToK/logs/`
-4. Create GitHub issue with:
+1. Run the script once to generate `config.json` (if not present)
+2. Open `public/ToK/config.json` and set `"debug": true`
+3. Reproduce the issue
+4. Get log file from `public/ToK/logs/`
+5. Create GitHub issue with:
    - Description of problem
    - What you expected
    - Log excerpt showing the issue

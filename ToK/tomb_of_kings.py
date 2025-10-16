@@ -21,16 +21,50 @@ except ImportError:
 
 
 # ============================================================================
-# DEBUG MODE - Set to True to enable extensive logging
+# DEBUG MODE - Controlled via config.json
 # ============================================================================
-# 
-# **FOR USERS**: If you encounter issues with the script:
-# 1. Change DEBUG = False to DEBUG = True below
-# 2. Run the script and reproduce the issue
-# 3. Find the log file in ToK/logs/tomb_of_kings-YYYYMMDD.log
-# 4. Share the log file for troubleshooting
 #
-DEBUG = False  # <-- Change this to True for detailed logs
+# FOR USERS: Enable debug in config.json for persistence.
+# - Set "debug": true in config.json
+# - Logs: ToK/logs/tomb_of_kings-YYYYMMDD.log (JSON Lines)
+#
+
+# Unified configuration loading: single read/creation at import time
+def _load_or_create_config():
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cfg_path = os.path.join(script_dir, "config.json")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        # Create default config on first run
+        default_cfg = {
+            "version": "1.0.0",
+            "debug": False,
+            "use_distance": 1,
+            "detection_range": 25,
+            "hue_green": 0x0044,
+            "hue_red": 0x0021,
+            "phase_log_interval_seconds": 5.0
+        }
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(default_cfg, f, indent=4, ensure_ascii=False)
+        return default_cfg
+    except Exception:
+        # Fallback to safe defaults if anything goes wrong
+        return {
+            "version": "1.0.0",
+            "debug": False,
+            "use_distance": 1,
+            "detection_range": 25,
+            "hue_green": 0x0044,
+            "hue_red": 0x0021,
+            "phase_log_interval_seconds": 5.0
+        }
+
+# Load config once and set DEBUG before logger initialization
+CONFIG = _load_or_create_config()
+DEBUG = bool(CONFIG.get("debug", False))
 # ============================================================================
 
 
@@ -111,64 +145,6 @@ class ScriptLogger:
 logger = ScriptLogger("tomb_of_kings")
 
 
-class ShadowguardLogger:
-    """
-    JSON structured logger for Shadowguard script.
-    Creates logs/ folder if it doesn't exist.
-    Logs in JSON Lines format for easy parsing.
-    """
-    
-    def __init__(self):
-        # Create logs directory if it doesn't exist
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.log_dir = os.path.join(script_dir, "logs")
-        
-        try:
-            os.makedirs(self.log_dir, exist_ok=True)
-        except Exception as e:
-            print(f"WARNING: Could not create logs directory: {e}")
-            self.log_dir = None
-    
-    def _log_event(self, level, room, event, msg, details=None):
-        """Internal method to write log entry"""
-        if not self.log_dir:
-            return
-        
-        try:
-            entry = {
-                "event": event,
-                "msg": msg,
-                "level": level,
-                "details": details or {},
-                "ts": datetime.now(timezone.utc).isoformat() + "Z",
-                "room": room
-            }
-            
-            logfile = os.path.join(
-                self.log_dir, 
-                f"shadowguard-{datetime.now(timezone.utc).strftime('%Y%m%d')}.log"
-            )
-            
-            with open(logfile, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception as e:
-            print(f"Logging error: {e}")
-    
-    def info(self, room, event, msg, details=None):
-        """Log INFO level message"""
-        self._log_event("INFO", room, event, msg, details)
-    
-    def warning(self, room, event, msg, details=None):
-        """Log WARNING level message"""
-        self._log_event("WARNING", room, event, msg, details)
-    
-    def error(self, room, event, msg, details=None):
-        """Log ERROR level message"""
-        self._log_event("ERROR", room, event, msg, details)
-    
-    def debug(self, room, event, msg, details=None):
-        """Log DEBUG level message"""
-        self._log_event("DEBUG", room, event, msg, details)
 
 
 class TombOfKings:
@@ -198,10 +174,20 @@ class TombOfKings:
     DETECTION_RANGE = 25 # Range to detect objects
     
     def __init__(self):
-        self.version = "1.0.0"
-        self.lever_data = {}  # Dictionary: {serial: {name, graphic, hue, x, y, initially_usable}}
-        self.levers_scanned = False  # Flag to scan only once
-        self.total_usable_levers = 0  # Count of usable levers at start (max 12)
+        # Load config first and sync DEBUG
+        self.config = self.load_config()
+        self.version = self.config.get("version", "1.0.0")
+        
+        # Override tunables from config (instance-level to allow per-run overrides)
+        self.USE_DISTANCE = int(self.config.get("use_distance", self.USE_DISTANCE))
+        self.DETECTION_RANGE = int(self.config.get("detection_range", self.DETECTION_RANGE))
+        self.HUE_GREEN = int(self.config.get("hue_green", self.HUE_GREEN))
+        self.HUE_RED = int(self.config.get("hue_red", self.HUE_RED))
+        
+        # Data structures
+        self.lever_data = {}  # {serial: {name, graphic, hue, x, y, initially_usable}}
+        self.levers_scanned = False  # Scan only once
+        self.total_usable_levers = 0  # Count usable levers at start (max 12)
         self.levers_used_count = 0  # Count of levers we've actually used
         
         # Flame tracking
@@ -210,11 +196,33 @@ class TombOfKings:
         self.flame_order_used = False
         self.flame_chaos_used = False
         
+        # Logging reduction state
+        self._lever_in_range = {}   # serial -> bool
+        self._flame_in_range = {}   # serial -> bool
+        self._last_phase_state = None
+        self._phase_log_interval = float(self.config.get("phase_log_interval_seconds", 5.0))
+        self._last_phase_log = 0.0
+        
+    def load_config(self):
+        """Return preloaded configuration (single-load at module import)."""
+        try:
+            return dict(CONFIG)
+        except Exception:
+            return self.get_default_config()
+    
+    def get_default_config(self):
+        """Default configuration values for this script."""
+        return {
+            "version": "1.0.0",
+            "debug": False,
+            "use_distance": self.USE_DISTANCE,
+            "detection_range": self.DETECTION_RANGE,
+            "hue_green": self.HUE_GREEN,
+            "hue_red": self.HUE_RED
+        }
+        
     def run(self):
         """Main script loop"""
-        API.SysMsg("Tomb of Kings - Lever & Flames Helper", 0x3F)
-        API.SysMsg("Walk near green objects to use them", 0x3F)
-        
         logger.info("MAIN", "SCRIPT_START", "Tomb of Kings script started", {
             "debug_mode": DEBUG,
             "version": self.version,
@@ -223,8 +231,6 @@ class TombOfKings:
             "player_z": API.Player.Z
         })
         
-        if DEBUG:
-            API.SysMsg(f"DEBUG MODE: Enabled (detailed logs in logs/ folder)", 0x44)
         
         while not API.StopRequested:
             try:
@@ -277,26 +283,28 @@ class TombOfKings:
                         "unusable_levers": len(self.lever_data) - self.total_usable_levers
                     })
                     
-                    if self.total_usable_levers == 0:
-                        API.SysMsg("No usable levers found - going straight to flames", 0x3F)
-                    else:
-                        API.SysMsg(f"Found {self.total_usable_levers} usable levers", 0x3F)
                     self.levers_scanned = True
                 
                 # Check if all levers used - trigger flame phase
                 # If no usable levers at start (0), go straight to flame phase
                 all_levers_used = (self.total_usable_levers == 0) or (self.levers_used_count >= self.total_usable_levers)
                 
-                logger.debug("MAIN", "PHASE_CHECK", "Checking phase transition", {
-                    "all_levers_used": all_levers_used,
-                    "total_usable_levers": self.total_usable_levers,
-                    "levers_used_count": self.levers_used_count,
-                    "flames_scanned": self.flames_scanned
-                })
+                # Throttled/state-change phase logging
+                current_state = (all_levers_used, self.total_usable_levers, self.levers_used_count, self.flames_scanned)
+                now = datetime.now(timezone.utc).timestamp()
+                should_log_phase = (self._last_phase_state != current_state) or (now - self._last_phase_log >= self._phase_log_interval)
+                if should_log_phase:
+                    logger.debug("MAIN", "PHASE_CHECK", "Phase state", {
+                        "all_levers_used": all_levers_used,
+                        "total_usable_levers": self.total_usable_levers,
+                        "levers_used_count": self.levers_used_count,
+                        "flames_scanned": self.flames_scanned
+                    })
+                    self._last_phase_state = current_state
+                    self._last_phase_log = now
                 
                 # Scan for flames ONLY if all levers used AND not scanned yet
                 if all_levers_used and not self.flames_scanned:
-                    API.SysMsg("All levers used! Scanning for flames...", 0x3F)
                     logger.info("MAIN", "FLAME_PHASE_START", "All levers used, scanning flames", {
                         "levers_used": self.levers_used_count,
                         "total_levers": self.total_usable_levers
@@ -335,7 +343,6 @@ class TombOfKings:
                         "flame_count": len(self.flame_data),
                         "flame_names": [f["name"] for f in self.flame_data.values()]
                     })
-                    API.SysMsg(f"Found {len(self.flame_data)} flames (green)", 0x3F)
                     self.flames_scanned = True
                 
                 # Process levers from MEMORY ONLY (no API calls)
@@ -355,18 +362,21 @@ class TombOfKings:
                         dy = abs(pos_y - API.Player.Y)
                         distance = max(dx, dy)
                         
-                        logger.debug("LEVER", "DISTANCE_CHECK", f"Checking lever proximity", {
-                            "serial": hex(serial),
-                            "lever_pos": f"({pos_x}, {pos_y})",
-                            "player_pos": f"({API.Player.X}, {API.Player.Y})",
-                            "distance": distance,
-                            "use_distance": self.USE_DISTANCE,
-                            "in_range": distance <= self.USE_DISTANCE
-                        })
+                        in_range = distance <= self.USE_DISTANCE
+                        prev = self._lever_in_range.get(serial)
+                        if prev is None or prev != in_range:
+                            logger.debug("LEVER", "RANGE_CHANGE", "Lever range state changed", {
+                                "serial": hex(serial),
+                                "lever_pos": f"({pos_x}, {pos_y})",
+                                "player_pos": f"({API.Player.X}, {API.Player.Y})",
+                                "distance": distance,
+                                "use_distance": self.USE_DISTANCE,
+                                "in_range": in_range
+                            })
+                            self._lever_in_range[serial] = in_range
                         
                         if distance <= self.USE_DISTANCE:
                             # Use the lever
-                            API.SysMsg(f"Using lever", 0x3F)
                             logger.info("LEVER", "USING_LEVER", "Attempting to use lever", {
                                 "serial": hex(serial),
                                 "position": f"({pos_x}, {pos_y})",
@@ -396,7 +406,6 @@ class TombOfKings:
                                 "total_count": self.total_usable_levers
                             })
                             
-                            API.SysMsg(f"Lever used! ({self.levers_used_count}/{self.total_usable_levers})", 0x3F)
                             API.Pause(1.5)
                 
                 # Process flames from MEMORY ONLY (if flame phase active)
@@ -414,20 +423,23 @@ class TombOfKings:
                         dy = abs(pos_y - API.Player.Y)
                         distance = max(dx, dy)
                         
-                        logger.debug("FLAME", "DISTANCE_CHECK", f"Checking flame proximity: {name}", {
-                            "serial": hex(serial),
-                            "flame_name": name,
-                            "flame_pos": f"({pos_x}, {pos_y})",
-                            "player_pos": f"({API.Player.X}, {API.Player.Y})",
-                            "distance": distance,
-                            "use_distance": self.USE_DISTANCE,
-                            "in_range": distance <= self.USE_DISTANCE
-                        })
+                        in_range = distance <= self.USE_DISTANCE
+                        prev = self._flame_in_range.get(serial)
+                        if prev is None or prev != in_range:
+                            logger.debug("FLAME", "RANGE_CHANGE", "Flame range state changed", {
+                                "serial": hex(serial),
+                                "flame_name": name,
+                                "flame_pos": f"({pos_x}, {pos_y})",
+                                "player_pos": f"({API.Player.X}, {API.Player.Y})",
+                                "distance": distance,
+                                "use_distance": self.USE_DISTANCE,
+                                "in_range": in_range
+                            })
+                            self._flame_in_range[serial] = in_range
                         
                         if distance <= self.USE_DISTANCE:
                             # Say magic word depending on flame type
                             if name == self.FLAME_ORDER_NAME:
-                                API.SysMsg("Speaking: Ord", 0x3F)
                                 logger.info("FLAME", "SPEAKING_ORD", "Speaking magic word: Ord", {
                                     "serial": hex(serial),
                                     "flame_name": name
@@ -442,7 +454,6 @@ class TombOfKings:
                                     })
                                 self.flame_order_used = True
                             elif name == self.FLAME_CHAOS_NAME:
-                                API.SysMsg("Speaking: Anord", 0x3F)
                                 logger.info("FLAME", "SPEAKING_ANORD", "Speaking magic word: Anord", {
                                     "serial": hex(serial),
                                     "flame_name": name
@@ -487,12 +498,10 @@ class TombOfKings:
                                     "error": str(e)
                                 })
                             
-                            API.SysMsg(f"Flame used!", 0x3F)
                             API.Pause(1.5)
                 
                 # Check if all done - stop script
                 if all_levers_used and self.flame_order_used and self.flame_chaos_used:
-                    API.SysMsg("All tasks complete! Stopping script...", 0x44)
                     logger.info("MAIN", "COMPLETE", "All levers and flames used, stopping script", {
                         "levers_used": self.levers_used_count,
                         "total_levers": self.total_usable_levers,
@@ -518,8 +527,6 @@ class TombOfKings:
                     "total_levers": self.total_usable_levers
                 })
                 
-                if DEBUG:
-                    API.SysMsg(f"DEBUG: Check log file for details", 0x44)
                 
                 API.Pause(1.0)
     
@@ -581,7 +588,6 @@ class TombOfKings:
             })
         
         logger.info("CLEANUP", "COMPLETE", "Cleanup finished")
-        API.SysMsg("Tomb of Kings Helper - Stopped", 0x21)
 
 
 # ============================================================================
@@ -606,9 +612,6 @@ if TAZUO_API:
             "traceback": error_trace
         })
         
-        if DEBUG:
-            API.SysMsg(f"DEBUG: Full error logged to file", 0x44)
-            print(f"FATAL ERROR DETAILS:\n{error_trace}")
     finally:
         if script:
             try:

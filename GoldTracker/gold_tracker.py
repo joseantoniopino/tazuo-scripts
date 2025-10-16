@@ -72,17 +72,20 @@ except Exception as e:
 # ============================================================================
 # LOAD DEBUG FROM CONFIG (before class definitions)
 # ============================================================================
-DEBUG = False  # Default value
 try:
     config_path = os.path.join(script_dir, "config.json")
     if os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = json.load(f)
-            DEBUG = config_data.get("debug", False)
-            early_log(f"DEBUG mode loaded from config: {DEBUG}")
+            _debug_flag = bool(config_data.get("debug", False))
+            early_log(f"DEBUG mode loaded from config: {_debug_flag}")
+    else:
+        _debug_flag = False
+        early_log("config.json not found; DEBUG defaulting to False")
 except Exception as e:
     early_log(f"Could not load DEBUG from config: {e}")
-    DEBUG = False
+    _debug_flag = False
+DEBUG = _debug_flag
 
 
 # ============================================================================
@@ -204,10 +207,13 @@ class GoldTracker:
     """Main GoldTracker script class"""
     
     def __init__(self):
-        self.version = "0.9.0-beta"
-        
-        # Load config
+        # Load config first
         self.config = self.load_config()
+        # Version from config (fallback to code default)
+        self.version = self.config.get("version", "0.9.0-beta")
+        # Sync global DEBUG with config for consistent logging behavior
+        global DEBUG
+        DEBUG = bool(self.config.get("debug", False))
         
         # Initialize logger
         self.logger = ScriptLogger("gold_tracker")
@@ -249,10 +255,6 @@ class GoldTracker:
             "debug": DEBUG
         })
         
-        if DEBUG:
-            API.SysMsg("GoldTracker v{} - DEBUG MODE ENABLED".format(self.version), 0x44)
-        else:
-            API.SysMsg("GoldTracker v{} started".format(self.version), 0x3F)
     
     def load_config(self):
         """Load configuration from config.json, create if missing"""
@@ -273,7 +275,6 @@ class GoldTracker:
                     json.dump(config, f, indent=4, ensure_ascii=False)
                 
                 early_log(f"Default config.json created at {config_file}")
-                API.SysMsg("Created default config.json", 0x3F)
                 return config
         
         except Exception as e:
@@ -284,6 +285,7 @@ class GoldTracker:
     def get_default_config(self):
         """Get default configuration"""
         return {
+            "version": "0.9.0-beta",
             "gold_graphic_id": 3821,
             "update_interval_seconds": 5,
             "autosave_interval_seconds": 60,
@@ -300,7 +302,6 @@ class GoldTracker:
             # Phase 1: Zone selection
             zone = self.select_zone()
             if not zone:
-                API.SysMsg("GoldTracker: No zone selected, exiting", 0x44)
                 self.logger.info("MAIN", "NO_ZONE", "User cancelled zone selection")
                 return
             
@@ -326,14 +327,12 @@ class GoldTracker:
                     if self.gump_mgr.cancel_button_clicked:
                         self.logger.info("MAIN", "CANCEL_CLICKED", "Cancel button clicked - deleting session")
                         self.session_mgr.delete_current_session()
-                        API.SysMsg("Session cancelled and deleted", 0x21)
                         self.stop_requested = True
                         break
                     
                     if self.gump_mgr.pause_button_clicked:
                         self.paused = not self.paused
                         self.logger.info("MAIN", "PAUSE_TOGGLED", f"Paused: {self.paused}")
-                        API.SysMsg("Session paused" if self.paused else "Session resumed", 0x44)
                         self.gump_mgr.pause_button_clicked = False  # Reset flag
                     
                     if self.gump_mgr.minimize_button_clicked:
@@ -363,7 +362,6 @@ class GoldTracker:
                     if time.time() - self.last_autosave >= self.config["autosave_interval_seconds"]:
                         self.session_mgr.auto_save()
                         self.last_autosave = time.time()
-                        self.logger.info("AUTOSAVE", "SUCCESS", "Session auto-saved")
                     
                     # Update gump display
                     session_data = self.session_mgr.get_session_data()
@@ -398,7 +396,6 @@ class GoldTracker:
         
         if not zones_dict:
             self.logger.warning("ZONE_SELECT", "NO_ZONES", "No zones available")
-            API.SysMsg("No zones configured. Please add zones to zones.json", 0x21)
             return None
         
         # Create gump with filtering support
@@ -448,7 +445,6 @@ class GoldTracker:
                 self.logger.info("ZONE_SELECT", "ZONE_RESULT", f"Zone: '{zone_name}', Exists: {exists}")
                 
                 if not zone_name:
-                    API.SysMsg("Please select a zone or enter a zone name", 0x21)
                     self.logger.warning("ZONE_SELECT", "NO_SELECTION", "No zone selected - input was empty")
                     self.gump_mgr.start_button_clicked = False  # Reset flag
                     API.Pause(0.3)
@@ -471,7 +467,6 @@ class GoldTracker:
                         self.zone_mgr.add_zone(final_zone_name, aliases)
                         self.logger.info("ZONE_SELECT", "ZONE_CREATED", 
                                        f"Created zone: {final_zone_name}, aliases: {aliases}")
-                        API.SysMsg(f"Zone '{final_zone_name}' created successfully", 0x3F)
                         return final_zone_name
                     else:
                         # User cancelled, recreate selection gump
@@ -536,7 +531,6 @@ class GoldTracker:
         # Create session gump
         self.gump_mgr.create_session_gump(zone)
         
-        API.SysMsg("Session started: {}".format(zone), 0x3F)
         self.logger.info("SESSION_INIT", "COMPLETE", "Session initialization complete")
     
     def scan_backpack_gold(self):
@@ -592,7 +586,6 @@ class GoldTracker:
         """
         try:
             self.logger.info("INSURANCE", "READ_START", "Opening insurance gump")
-            API.SysMsg("Reading insurance cost...", 0x44)
             
             # Open insurance menu (context menu option 5)
             API.ContextMenu(API.Player.Serial, 5)
@@ -630,7 +623,6 @@ class GoldTracker:
                     # Save to config (always, regardless of source)
                     self.save_insurance_to_config(cost)
                     
-                    API.SysMsg("Insurance cost: {} gp".format(cost), 0x3F)
                     return cost
                 else:
                     # LOG: Regex didn't match
@@ -657,7 +649,6 @@ class GoldTracker:
             # ALWAYS ask user for manual input if auto-read fails
             # Saved insurance cost is only used to PRE-FILL the input
             self.logger.info("INSURANCE", "PROMPT_USER", "Auto-read failed, prompting user for insurance cost")
-            API.SysMsg("Could not auto-read insurance. Please verify/update.", 0x44)
             
             # Get saved insurance from config (default to 0 if not set)
             saved_insurance = self.config.get("insurance_cost", 0)
@@ -721,15 +712,12 @@ class GoldTracker:
                     self.save_insurance_to_config(cost)
                     
                     self.logger.info("INSURANCE", "USER_PROVIDED", f"User entered: {cost} gp")
-                    API.SysMsg("Insurance cost saved: {} gp".format(cost), 0x3F)
                     return cost
                 else:
                     self.logger.warning("INSURANCE", "NO_INPUT", "User provided no insurance cost")
-                    API.SysMsg("No insurance cost entered. Using 0 gp.", 0x44)
                     return 0
             except:
                 self.logger.error("INSURANCE", "PARSE_ERROR", "Could not parse user input")
-                API.SysMsg("Invalid input. Using 0 gp.", 0x21)
                 return 0
     
     def on_player_hits_changed(self, new_hits):
@@ -806,10 +794,6 @@ class GoldTracker:
             self.logger.error("DEATH", "STATE_ERROR", f"Failed to capture state: {e}", {"traceback": traceback.format_exc()})
             # Continue anyway - death counting is more important than full state capture
         
-        # Log to screen for immediate visibility
-        early_log(f">>> About to check screen message")
-        API.SysMsg(f"DEATH EVENT: HP={current_hp}", 0x44)
-        early_log(f">>> Screen message sent")
         
         # Check if this is a duplicate event (within 10 seconds)
         early_log(f">>> About to check duplicate")
@@ -850,18 +834,11 @@ class GoldTracker:
             "insurance_cost_per_death": self.cached_insurance_cost,
             "total_deaths": session["deaths"]
         })
-        API.SysMsg(f"DEATH COUNTED: Total deaths = {session['deaths']}", 0x21)
         
         # Update session data
         self.session_mgr.update_session_data(deaths=session["deaths"])
         
-        # Notify user
-        API.SysMsg("Death #{} - Insurance: {} gp (HP: {}/{})".format(
-            session["deaths"],
-            self.cached_insurance_cost,
-            player_state['player_hits'],
-            player_state['player_max_hits']
-        ), 0x21)
+        # No on-screen SysMsg to avoid noise; details are in logs when DEBUG=True
     
     def update_gold_tracking(self):
         """
@@ -928,12 +905,9 @@ class GoldTracker:
             self.logger.info("ADJUSTMENT", "APPLIED", f"Adjustment applied: {adjustment:+d} gp", {
                 "total_adjustments": session["manual_adjustments"] if session else 0
             })
-            
-            API.SysMsg("Adjustment applied: {:+d} gp".format(adjustment), 0x3F)
         
         except ValueError as e:
             self.logger.warning("ADJUSTMENT", "INVALID_INPUT", f"Invalid input: '{input_text}'")
-            API.SysMsg("Invalid input. Use numbers only (e.g., '-5000' or '5000')", 0x21)
         
         except Exception as e:
             self.logger.error("ADJUSTMENT", "ERROR", str(e), {
@@ -948,7 +922,6 @@ class GoldTracker:
             if self.session_active:
                 # Finalize session
                 self.session_mgr.end_session()
-                API.SysMsg("GoldTracker: Session ended and saved", 0x3F)
                 self.logger.info("CLEANUP", "SESSION_SAVED", "Session finalized and saved")
             
             # Unregister callbacks (CRITICAL to prevent "Too many callbacks" error)
