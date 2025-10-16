@@ -204,7 +204,7 @@ class GoldTracker:
     """Main GoldTracker script class"""
     
     def __init__(self):
-        self.version = "1.0.0-alpha"
+        self.version = "0.9.0-beta"
         
         # Load config
         self.config = self.load_config()

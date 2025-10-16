@@ -330,11 +330,11 @@ To enable detailed logging:
 - ✅ **Dynamic filtering** - Real-time zone search
 - ✅ **Zone creation** - Add custom zones in-game
 
-### Planned Features (Not Yet Implemented)
-- ⏳ **Session merging** - Combine interrupted sessions
-- ⏳ **Manual adjustments** - Edit gold/deaths after session
-- ⏳ **Statistics dashboard** - View historical data in-game
-- ⏳ **Zone deletion** - Remove zones from in-game UI
+### Roadmap (Next)
+- ⏳ Visual tweaks (labels/minor UI text)
+- ⏳ Session time accounting includes paused duration (exclude pause from active time)
+- ⏳ In-game CRUD for sessions and zones (create/update/delete via gump)
+- ⏳ Merge sessions when zone and day match (consolidate same-day runs)
 
 ---
 
@@ -356,10 +356,10 @@ Original work by Foruno for TazUO.
 
 ## 📚 Additional Documentation
 
-- **Development notes:** See `PLANNING.md` for detailed implementation notes
+- Development notes: PLANNING.md was an initial planning document and may be outdated; use this README and CHANGELOG as the current source of truth
 - **Example files:** Check `config.json.example` and `zones.json.example` for format reference
 
 ---
 
-**Last Updated:** October 14, 2025  
-**Version:** 1.0.0-alpha
+**Last Updated:** October 16, 2025  
+**Version:** 0.9.0-beta
