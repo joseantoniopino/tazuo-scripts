@@ -4,10 +4,21 @@ All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning. Alpha/Beta versions use 0.x.x; 1.x.x indicates a stable release.
 
 ## [Unreleased]
-- Planned: Visual tweaks (labels/minor UI text)
-- Planned: Session time accounting includes paused duration (exclude pause from active time)
 - Planned: In-game CRUD for sessions and zones (create/update/delete via gump)
 - Planned: Merge sessions when zone and day match (consolidate same-day runs)
+
+## [0.10.0-beta] - 2025-10-17
+### Added
+- Finish → Summary flow with "Save" and "Discard" actions.
+- End time fixed at Finish; Summary shows exact timestamp; Save keeps and Discard removes the CSV row.
+- Pause/Resume toggle button with synchronized blinking timer while paused.
+- Pause-aware timing in CSV: new columns `session_duration` and `paused_time` (HH:MM:SS).
+- Themed UI with shared `ui_theme` (button hues: Primary/Success/Danger/Warning; improved backgrounds and contrast).
+- Session gump now closes when Finish is pressed; mini gump respects finalization state.
+
+### Changed
+- CSV schema updated: replaced `duration_minutes` with `session_duration` and added `paused_time`.
+- Documentation updated to reflect new flow, colors, and timing model.
 
 ## [0.9.0-beta] - 2025-10-16
 ### Changed

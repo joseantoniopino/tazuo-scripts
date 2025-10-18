@@ -44,7 +44,6 @@ def _load_or_create_config():
             "use_distance": 1,
             "detection_range": 25,
             "hue_green": 0x0044,
-            "hue_red": 0x0021,
             "phase_log_interval_seconds": 5.0
         }
         with open(cfg_path, "w", encoding="utf-8") as f:
@@ -58,7 +57,6 @@ def _load_or_create_config():
             "use_distance": 1,
             "detection_range": 25,
             "hue_green": 0x0044,
-            "hue_red": 0x0021,
             "phase_log_interval_seconds": 5.0
         }
 
@@ -165,9 +163,8 @@ class TombOfKings:
     FLAME_ORDER_NAME = "Flame Of Order"
     FLAME_CHAOS_NAME = "Flame Of Chaos"
     
-    # Hue colors (client-side visual markers)
-    HUE_GREEN = 0x0044   # Verde - Usable/Detected
-    HUE_RED = 0x0021     # Rojo - Used
+    # Hue color (client-side visual marker)
+    HUE_GREEN = 0x0044   # Green - Usable/Detected
     
     # Distances
     USE_DISTANCE = 1     # Distance to auto-use lever/flame (must be adjacent)
@@ -182,7 +179,6 @@ class TombOfKings:
         self.USE_DISTANCE = int(self.config.get("use_distance", self.USE_DISTANCE))
         self.DETECTION_RANGE = int(self.config.get("detection_range", self.DETECTION_RANGE))
         self.HUE_GREEN = int(self.config.get("hue_green", self.HUE_GREEN))
-        self.HUE_RED = int(self.config.get("hue_red", self.HUE_RED))
         
         # Data structures
         self.lever_data = {}  # {serial: {name, graphic, hue, x, y, initially_usable}}
@@ -217,8 +213,7 @@ class TombOfKings:
             "debug": False,
             "use_distance": self.USE_DISTANCE,
             "detection_range": self.DETECTION_RANGE,
-            "hue_green": self.HUE_GREEN,
-            "hue_red": self.HUE_RED
+            "hue_green": self.HUE_GREEN
         }
         
     def run(self):
@@ -476,27 +471,10 @@ class TombOfKings:
                                 "chaos_used": self.flame_chaos_used
                             })
                             
-                            # Try to paint red (testing if flames allow hue change)
-                            try:
-                                logger.debug("FLAME", "PAINT_ATTEMPT", "Attempting to paint flame red", {
-                                    "serial": hex(serial)
-                                })
-                                flame_obj = API.FindItem(serial)
-                                if flame_obj:
-                                    flame_obj.SetHue(self.HUE_RED)
-                                    logger.debug("FLAME", "PAINT_SUCCESS", "Flame painted red", {
-                                        "serial": hex(serial),
-                                        "new_hue": hex(self.HUE_RED)
-                                    })
-                                else:
-                                    logger.warning("FLAME", "PAINT_FAIL", "FindItem returned None", {
-                                        "serial": hex(serial)
-                                    })
-                            except Exception as e:
-                                logger.warning("FLAME", "PAINT_ERROR", f"Could not paint flame red: {str(e)}", {
-                                    "serial": hex(serial),
-                                    "error": str(e)
-                                })
+                            # Skip painting flames to avoid client-side redraw glitch after state changes
+                            logger.debug("FLAME", "PAINT_SKIPPED", "Skipping flame recolor to avoid visual glitch", {
+                                "serial": hex(serial)
+                            })
                             
                             API.Pause(1.5)
                 

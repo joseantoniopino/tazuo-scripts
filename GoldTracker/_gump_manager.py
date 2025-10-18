@@ -2,7 +2,21 @@
 # Handles zone selection and session tracking gumps
 
 import traceback
+import time
+import os
+import sys
 from datetime import datetime
+
+# Try to import shared UI theme (agnostic)
+THEME = None
+try:
+    # Attempt import from parent 'public' folder
+    parent_dir = os.path.dirname(os.path.dirname(__file__))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    import ui_theme as THEME  # type: ignore
+except Exception:
+    THEME = None
 
 
 class GumpManager:
@@ -15,6 +29,11 @@ class GumpManager:
         self.zone_gump = None
         self.session_gump = None
         self.controls = {}
+        
+        # Summary gump references
+        self.summary_gump = None
+        self.summary_save_clicked = False
+        self.summary_discard_clicked = False
         
         # Button click flags (set by callbacks)
         self.start_button_clicked = False
@@ -32,6 +51,39 @@ class GumpManager:
         self.all_zones = {}  # {zone_name: [aliases]}
         self.filtered_zones = []  # Currently visible zones
         self.last_filter_text = ""
+        
+        # Color scheme and palette (from shared theme if available)
+        if THEME:
+            self.HUE_PRIMARY = THEME.HUES.PRIMARY
+            self.HUE_SUCCESS = THEME.HUES.SUCCESS
+            self.HUE_DANGER = THEME.HUES.DANGER
+            self.HUE_WARNING = THEME.HUES.WARNING
+            self.HUE_MUTED = THEME.HUES.MUTED
+            self.HUE_CYAN = getattr(THEME.HUES, 'CYAN', THEME.HUES.PRIMARY)
+            self.TITLE_HUE = THEME.HUES.TITLE
+            self.COLOR_BG = THEME.background_color()
+            self.COLOR_HEADER = THEME.header_color()
+            self.COLOR_SEPARATOR = THEME.separator_color()
+        else:
+            # Fallbacks
+            self.HUE_PRIMARY = 0x0058   # blue for primary actions (Finish)
+            self.HUE_SUCCESS = 0x0044   # green
+            self.HUE_DANGER = 0x0021    # red
+            self.HUE_WARNING = 0x0035   # yellow
+            self.HUE_MUTED = 0x003F     # muted/white-ish
+            self.HUE_CYAN = 0x005A      # cyan-like text (lighter)
+            self.TITLE_HUE = 0x0481     # blue-ish
+            self.COLOR_BG = "#0f172a"   # deep background
+            self.COLOR_HEADER = "#1e40af"  # blue accent fallback (darker)
+            self.COLOR_SEPARATOR = "#374151"
+        
+        # Blink state for paused timer
+        self._blink_on = False
+        self._last_blink_toggle = 0.0
+        self._blink_interval = 0.5  # seconds
+        
+        # Finalization state (to avoid recreating session gump after Finish)
+        self.finalizing = False
         
         if self.debug:
             print("[GumpManager] Initialized")
@@ -58,19 +110,23 @@ class GumpManager:
             self.zone_gump.CenterYInViewPort()
             
             # Background
-            bg = self.api.CreateGumpColorBox(0.9, "#1a1a2e")
+            bg = self.api.CreateGumpColorBox(0.9, self.COLOR_BG)
             bg.SetRect(0, 0, gump_width, gump_height)
             self.zone_gump.Add(bg)
             self.controls["background"] = bg
+            # Accent header bar
+            header = self.api.CreateGumpColorBox(1.0, self.COLOR_HEADER)
+            header.SetRect(0, 0, gump_width, 8)
+            self.zone_gump.Add(header)
             
             # Title
-            title = self.api.CreateGumpLabel("GoldTracker - Select Zone", 0x0481)
+            title = self.api.CreateGumpLabel("GoldTracker - Select Zone", self.TITLE_HUE)
             title.SetPos(gump_width // 2 - 100, 20)
             self.zone_gump.Add(title)
             self.controls["title"] = title
             
             # Filter textbox (at top)
-            filter_label = self.api.CreateGumpLabel("Type to filter zones, or enter new zone name:", 0x44)
+            filter_label = self.api.CreateGumpLabel("Type to filter zones, or enter new zone name:", self.HUE_PRIMARY)
             filter_label.SetPos(30, 55)
             self.zone_gump.Add(filter_label)
             self.controls["filter_label"] = filter_label
@@ -92,6 +148,7 @@ class GumpManager:
             start_btn = self.api.CreateSimpleButton("Start Session", 150, 35)
             start_btn.SetPos(175, 370)
             self.zone_gump.Add(start_btn)
+            start_btn.Hue = self.HUE_PRIMARY
             self.controls["start_button"] = start_btn
             
             # Start button callback
@@ -103,7 +160,7 @@ class GumpManager:
             self.api.AddControlOnClick(start_btn, on_start_click)
             
             # Instructions label
-            instructions = self.api.CreateGumpLabel("List filters as you type. Click zone to auto-fill.", 0x3F)
+            instructions = self.api.CreateGumpLabel("List filters as you type. Click zone to auto-fill.", self.HUE_CYAN)
             instructions.SetPos(65, 410)
             self.zone_gump.Add(instructions)
             self.controls["instructions"] = instructions
@@ -408,17 +465,21 @@ class GumpManager:
             modal_gump.CenterYInViewPort()
             
             # Background
-            bg = self.api.CreateGumpColorBox(0.95, "#2a2a3e")
+            bg = self.api.CreateGumpColorBox(0.95, self.COLOR_BG)
             bg.SetRect(0, 0, modal_width, modal_height)
             modal_gump.Add(bg)
+            # Accent header bar
+            header = self.api.CreateGumpColorBox(1.0, self.COLOR_HEADER)
+            header.SetRect(0, 0, modal_width, 6)
+            modal_gump.Add(header)
             
             # Title
-            title = self.api.CreateGumpLabel("Create New Zone", 0x0481)
+            title = self.api.CreateGumpLabel("Create New Zone", self.TITLE_HUE)
             title.SetPos(modal_width // 2 - 70, 20)
             modal_gump.Add(title)
             
             # Instructions (same layout as create_new_zone_prompt, no redundant zone label)
-            instr1 = self.api.CreateGumpLabel("Add search aliases (comma-separated):", 0x44)
+            instr1 = self.api.CreateGumpLabel("Add search aliases (comma-separated):", self.HUE_PRIMARY)
             instr1.SetPos(30, 60)
             modal_gump.Add(instr1)
             
@@ -447,6 +508,10 @@ class GumpManager:
             cancel_btn = self.api.CreateSimpleButton("Cancel", 120, 35)
             cancel_btn.SetPos(230, 200)
             modal_gump.Add(cancel_btn)
+            
+            # Apply bootstrap-like hues
+            create_btn.Hue = self.HUE_SUCCESS
+            cancel_btn.Hue = self.HUE_DANGER
             
             # Button callbacks (reuse existing flags)
             create_clicked = self.modal_create_clicked
@@ -496,17 +561,21 @@ class GumpManager:
             modal_gump.CenterYInViewPort()
             
             # Background
-            bg = self.api.CreateGumpColorBox(0.95, "#2a2a3e")
+            bg = self.api.CreateGumpColorBox(0.95, self.COLOR_BG)
             bg.SetRect(0, 0, modal_width, modal_height)
             modal_gump.Add(bg)
+            # Accent header bar
+            header = self.api.CreateGumpColorBox(1.0, self.COLOR_HEADER)
+            header.SetRect(0, 0, modal_width, 6)
+            modal_gump.Add(header)
             
             # Title
-            title = self.api.CreateGumpLabel("Create New Zone", 0x0481)
+            title = self.api.CreateGumpLabel("Create New Zone", self.TITLE_HUE)
             title.SetPos(modal_width // 2 - 70, 20)
             modal_gump.Add(title)
             
             # Instructions (removed redundant zone name label)
-            instr1 = self.api.CreateGumpLabel("Add search aliases (comma-separated):", 0x44)
+            instr1 = self.api.CreateGumpLabel("Add search aliases (comma-separated):", self.HUE_PRIMARY)
             instr1.SetPos(30, 60)
             modal_gump.Add(instr1)
             
@@ -535,6 +604,10 @@ class GumpManager:
             cancel_btn = self.api.CreateSimpleButton("Cancel", 120, 35)
             cancel_btn.SetPos(230, 200)
             modal_gump.Add(cancel_btn)
+            
+            # Apply bootstrap-like hues
+            create_btn.Hue = self.HUE_SUCCESS
+            cancel_btn.Hue = self.HUE_DANGER
             
             # Button click flags
             create_clicked = [False]  # Use list for closure
@@ -647,12 +720,16 @@ class GumpManager:
                 self.session_gump.CenterYInViewPort()
             
             # Background
-            bg = self.api.CreateGumpColorBox(0.9, "#1a1a2e")
+            bg = self.api.CreateGumpColorBox(0.9, self.COLOR_BG)
             bg.SetRect(0, 0, gump_width, gump_height)
             self.session_gump.Add(bg)
+            # Accent header bar
+            header = self.api.CreateGumpColorBox(1.0, self.COLOR_HEADER)
+            header.SetRect(0, 0, gump_width, 8)
+            self.session_gump.Add(header)
             
             # Title
-            title = self.api.CreateGumpLabel("GoldTracker - Active Session", 0x0481)
+            title = self.api.CreateGumpLabel("GoldTracker - Active Session", self.TITLE_HUE)
             title.SetPos(gump_width // 2 - 110, 25)
             self.session_gump.Add(title)
             self.controls["title"] = title
@@ -661,6 +738,7 @@ class GumpManager:
             minimize_btn = self.api.CreateSimpleButton("-", 30, 30)
             minimize_btn.SetPos(gump_width - 50, 20)
             self.session_gump.Add(minimize_btn)
+            minimize_btn.Hue = self.HUE_PRIMARY
             self.controls["minimize_button"] = minimize_btn
             
             def on_minimize_click():
@@ -670,29 +748,29 @@ class GumpManager:
             self.api.AddControlOnClick(minimize_btn, on_minimize_click)
             
             # Zone name (static)
-            zone_label = self.api.CreateGumpLabel(f"Zone: {zone}", 0x44)
+            zone_label = self.api.CreateGumpLabel(f"Zone: {zone}", self.HUE_CYAN)
             zone_label.SetPos(20, 50)
             self.session_gump.Add(zone_label)
             
             # Duration (dynamic)
-            duration_label = self.api.CreateGumpLabel("Duration: 00:00:00", 0x3F)
+            duration_label = self.api.CreateGumpLabel("Duration: 00:00:00", self.HUE_CYAN)
             duration_label.SetPos(20, 75)
             self.session_gump.Add(duration_label)
             self.controls["duration"] = duration_label
             
             # Separator
-            sep1 = self.api.CreateGumpColorBox(0.5, "#444444")
+            sep1 = self.api.CreateGumpColorBox(0.5, self.COLOR_SEPARATOR)
             sep1.SetRect(20, 100, 360, 1)
             self.session_gump.Add(sep1)
             
             # Gold looted (dynamic)
-            gold_label = self.api.CreateGumpLabel("Gold Looted: +0 gp", 0x3F)
+            gold_label = self.api.CreateGumpLabel("Gold Looted: +0 gp", self.HUE_CYAN)
             gold_label.SetPos(20, 115)
             self.session_gump.Add(gold_label)
             self.controls["gold_looted"] = gold_label
             
             # Deaths (dynamic)
-            deaths_label = self.api.CreateGumpLabel("Deaths: 0", 0x3F)
+            deaths_label = self.api.CreateGumpLabel("Deaths: 0", self.HUE_CYAN)
             deaths_label.SetPos(20, 140)
             self.session_gump.Add(deaths_label)
             self.controls["deaths"] = deaths_label
@@ -704,23 +782,23 @@ class GumpManager:
             self.controls["insurance"] = insurance_label
             
             # Separator
-            sep2 = self.api.CreateGumpColorBox(0.5, "#444444")
+            sep2 = self.api.CreateGumpColorBox(0.5, self.COLOR_SEPARATOR)
             sep2.SetRect(20, 190, 360, 1)
             self.session_gump.Add(sep2)
             
             # Net profit (dynamic, large)
-            profit_label = self.api.CreateGumpLabel("NET PROFIT: 0 gp", 0x44)
+            profit_label = self.api.CreateGumpLabel("NET PROFIT: 0 gp", self.HUE_CYAN)
             profit_label.SetPos(20, 205)
             self.session_gump.Add(profit_label)
             self.controls["net_profit"] = profit_label
             
             # Separator
-            sep3 = self.api.CreateGumpColorBox(0.5, "#444444")
+            sep3 = self.api.CreateGumpColorBox(0.5, self.COLOR_SEPARATOR)
             sep3.SetRect(20, 230, 360, 1)
             self.session_gump.Add(sep3)
             
             # Manual adjustment section
-            adjust_label = self.api.CreateGumpLabel("Manual Adjustment:", 0x3F)
+            adjust_label = self.api.CreateGumpLabel("Manual Adjustment:", self.HUE_CYAN)
             adjust_label.SetPos(20, 245)
             self.session_gump.Add(adjust_label)
             
@@ -732,6 +810,8 @@ class GumpManager:
             adjust_btn = self.api.CreateSimpleButton("Apply", 70, 25)
             adjust_btn.SetPos(180, 270)
             self.session_gump.Add(adjust_btn)
+            # Use WARNING (yellow/orange) to differentiate from Pause (green) and Finish (blue)
+            adjust_btn.Hue = self.HUE_WARNING
             self.controls["adjust_button"] = adjust_btn
             
             # Add click callback to adjust button
@@ -742,7 +822,7 @@ class GumpManager:
             self.api.AddControlOnClick(adjust_btn, on_adjust_click)
             
             # Last update timestamp (dynamic)
-            update_label = self.api.CreateGumpLabel("Last Update: --:--:--", 0x3F)
+            update_label = self.api.CreateGumpLabel("Last Update: --:--:--", self.HUE_CYAN)
             update_label.SetPos(20, 305)
             self.session_gump.Add(update_label)
             self.controls["last_update"] = update_label
@@ -751,6 +831,7 @@ class GumpManager:
             pause_btn = self.api.CreateSimpleButton("Pause", 80, 30)
             pause_btn.SetPos(50, 340)
             self.session_gump.Add(pause_btn)
+            pause_btn.Hue = self.HUE_SUCCESS
             self.controls["pause_button"] = pause_btn
             
             # Add click callback to pause button
@@ -760,23 +841,25 @@ class GumpManager:
                     print("[GumpManager] Pause button clicked")
             self.api.AddControlOnClick(pause_btn, on_pause_click)
             
-            # Stop button
-            stop_btn = self.api.CreateSimpleButton("Stop", 80, 30)
+            # Finish button
+            stop_btn = self.api.CreateSimpleButton("Finish", 80, 30)
             stop_btn.SetPos(160, 340)
             self.session_gump.Add(stop_btn)
+            stop_btn.Hue = self.HUE_PRIMARY
             self.controls["stop_button"] = stop_btn
             
-            # Add click callback to stop button
+            # Add click callback to Finish button
             def on_stop_click():
                 self.stop_button_clicked = True
                 if self.debug:
-                    print("[GumpManager] Stop button clicked")
+                    print("[GumpManager] Finish button clicked")
             self.api.AddControlOnClick(stop_btn, on_stop_click)
             
             # Cancel button
             cancel_btn = self.api.CreateSimpleButton("Cancel", 80, 30)
             cancel_btn.SetPos(270, 340)
             self.session_gump.Add(cancel_btn)
+            cancel_btn.Hue = self.HUE_DANGER
             self.controls["cancel_button"] = cancel_btn
             
             # Add click callback to cancel button
@@ -822,14 +905,19 @@ class GumpManager:
         self.mini_gump.SetRect(mini_x, mini_y, mini_width, mini_height)
         
         # Background
-        mini_bg = self.api.CreateGumpColorBox(0.9, "#1a1a2e")
+        mini_bg = self.api.CreateGumpColorBox(0.9, self.COLOR_BG)
         mini_bg.SetRect(0, 0, mini_width, mini_height)
         self.mini_gump.Add(mini_bg)
+        # Accent header bar
+        mini_header = self.api.CreateGumpColorBox(1.0, self.COLOR_HEADER)
+        mini_header.SetRect(0, 0, mini_width, 6)
+        self.mini_gump.Add(mini_header)
         
         # Expand button (top right)
         expand_btn = self.api.CreateSimpleButton("+", 30, 30)
         expand_btn.SetPos(mini_width - 40, 10)
         self.mini_gump.Add(expand_btn)
+        expand_btn.Hue = self.HUE_PRIMARY
         
         def on_expand_click():
             self.minimize_button_clicked = True
@@ -838,13 +926,13 @@ class GumpManager:
         self.api.AddControlOnClick(expand_btn, on_expand_click)
         
         # Gold amount (large)
-        mini_gold = self.api.CreateGumpLabel("0 gp", 0x0481)
+        mini_gold = self.api.CreateGumpLabel("0 gp", self.HUE_CYAN)
         mini_gold.SetPos(20, 15)
         self.mini_gump.Add(mini_gold)
         self.controls["mini_gold"] = mini_gold
         
         # Duration
-        mini_duration = self.api.CreateGumpLabel("00:00:00", 0x3F)
+        mini_duration = self.api.CreateGumpLabel("00:00:00", self.HUE_CYAN)
         mini_duration.SetPos(20, 45)
         self.mini_gump.Add(mini_duration)
         self.controls["mini_duration"] = mini_duration
@@ -923,11 +1011,33 @@ class GumpManager:
             duration_text = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             net = session_data["net_profit"]
             
+            paused = bool(session_data.get("paused", False))
+            # Update Pause/Resume button text
+            try:
+                btn = self.controls.get("pause_button")
+                if btn:
+                    new_text = "Resume" if paused else "Pause"
+                    if hasattr(btn, "SetText"):
+                        btn.SetText(new_text)
+                    else:
+                        btn.Text = new_text
+                    btn.Hue = self.HUE_SUCCESS  # keep success color
+            except:
+                pass
+
+            # Blink handling while paused (synchronized to wall-clock seconds)
+            if paused:
+                self._blink_on = (int(time.time()) % 2 == 0)
+
             if self.minimized and "mini_gold" in self.controls:
                 # Update MINI gump
                 self.controls["mini_gold"].Text = f"{net:,} gp"
-                self.controls["mini_gold"].Hue = 0x44 if net >= 0 else 0x21
+                self.controls["mini_gold"].Hue = self.HUE_CYAN
                 self.controls["mini_duration"].Text = duration_text
+                if paused and "mini_duration" in self.controls:
+                    self.controls["mini_duration"].Hue = self.HUE_WARNING if self._blink_on else self.HUE_CYAN
+                elif "mini_duration" in self.controls:
+                    self.controls["mini_duration"].Hue = self.HUE_CYAN
             elif not self.minimized and "duration" in self.controls:
                 # Update FULL gump
                 self.controls["duration"].Text = f"Duration: {duration_text}"
@@ -935,10 +1045,17 @@ class GumpManager:
                 self.controls["deaths"].Text = f"Deaths: {session_data['deaths']}"
                 self.controls["insurance"].Text = f"Insurance: -{session_data['insurance_cost']:,} gp"
                 self.controls["net_profit"].Text = f"NET PROFIT: {net:,} gp"
-                self.controls["net_profit"].Hue = 0x44 if net >= 0 else 0x21
+                # Use cyan for positive net profit per user preference (instead of green)
+                self.controls["net_profit"].Hue = self.HUE_CYAN if net >= 0 else self.HUE_DANGER
                 
-                now = datetime.now().strftime("%H:%M:%S")
-                self.controls["last_update"].Text = f"Last Update: {now}"
+                # Blink hue for duration label when paused
+                if paused:
+                    self.controls["duration"].Hue = self.HUE_WARNING if self._blink_on else 0x3F
+                else:
+                    self.controls["duration"].Hue = self.HUE_CYAN
+                
+                now_str = datetime.now().strftime("%H:%M:%S")
+                self.controls["last_update"].Text = f"Last Update: {now_str}"
             
             if self.debug and session_data["duration_seconds"] % 10 == 0:
                 print(f"[GumpManager] Updated gump: {net:,} gp net profit")
@@ -991,6 +1108,9 @@ class GumpManager:
         """Recreate active gump if it was closed"""
         if not self.current_zone:
             return False
+        # Do not recreate if we're finalizing (Finish clicked)
+        if getattr(self, 'finalizing', False):
+            return False
         
         if self.minimized:
             # Check mini gump
@@ -1019,6 +1139,32 @@ class GumpManager:
                 return True
         
         return False
+    
+    def close_active_session_gump(self):
+        """Close active session and mini gumps and mark finalizing."""
+        try:
+            self.finalizing = True
+            # Dispose full session gump if exists
+            if getattr(self, 'session_gump', None):
+                try:
+                    if hasattr(self.session_gump, 'Dispose'):
+                        self.session_gump.Dispose()
+                except:
+                    pass
+                self.session_gump = None
+            # Dispose mini gump if exists
+            if hasattr(self, 'mini_gump') and getattr(self, 'mini_gump', None):
+                try:
+                    if hasattr(self.mini_gump, 'Dispose'):
+                        self.mini_gump.Dispose()
+                except:
+                    pass
+                self.mini_gump = None
+            if self.logger:
+                self.logger.info("GUMP", "SESSION_GUMP_CLOSED", "Closed session gump for summary phase")
+        except Exception as e:
+            if self.logger:
+                self.logger.error("GUMP", "SESSION_GUMP_CLOSE_ERROR", str(e), {"traceback": traceback.format_exc()})
     
     def is_zone_gump_open(self):
         """Check if zone selection gump is still open"""
@@ -1066,6 +1212,88 @@ class GumpManager:
         
         return False
     
+    def create_summary_gump(self, session_data):
+        """Create summary gump showing final session stats and Confirm/Back buttons."""
+        try:
+            # Reset flags
+            self.summary_save_clicked = False
+            self.summary_discard_clicked = False
+            
+            width = 480
+            height = 320
+            self.summary_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=True)
+            self.summary_gump.SetRect(0, 0, width, height)
+            self.summary_gump.CenterXInViewPort()
+            self.summary_gump.CenterYInViewPort()
+            
+            bg = self.api.CreateGumpColorBox(0.95, self.COLOR_BG)
+            bg.SetRect(0, 0, width, height)
+            self.summary_gump.Add(bg)
+            # Accent header bar
+            header = self.api.CreateGumpColorBox(1.0, self.COLOR_HEADER)
+            header.SetRect(0, 0, width, 8)
+            self.summary_gump.Add(header)
+            
+            title = self.api.CreateGumpLabel("Session Summary", self.TITLE_HUE)
+            title.SetPos(width // 2 - 80, 20)
+            self.summary_gump.Add(title)
+            
+            # Build lines
+            y = 60
+            line_gap = 24
+            def add_line(text):
+                nonlocal y
+                lbl = self.api.CreateGumpLabel(text, 0x3F)
+                lbl.SetPos(30, y)
+                self.summary_gump.Add(lbl)
+                y += line_gap
+            
+            # Extract values with safe defaults
+            add_line(f"Start: {session_data.get('start_time_str', '--')}")
+            add_line(f"End: {session_data.get('end_time_preview_str', '--')}")
+            add_line(f"Paused: {session_data.get('paused_time_str', '00:00:00')}")
+            add_line(f"Session Time: {session_data.get('session_duration_str', '00:00:00')}")
+            add_line(f"Gold (gross): +{session_data.get('gold_gained', 0):,} gp")
+            add_line(f"Deaths (insured): -{session_data.get('insurance_cost', 0):,} gp")
+            net = session_data.get('net_profit', 0)
+            add_line(f"Gold (net): {net:,} gp")
+            
+            # Buttons
+            save_btn = self.api.CreateSimpleButton("Save", 120, 35)
+            save_btn.SetPos(100, height - 60)
+            self.summary_gump.Add(save_btn)
+            discard_btn = self.api.CreateSimpleButton("Discard", 120, 35)
+            discard_btn.SetPos(260, height - 60)
+            self.summary_gump.Add(discard_btn)
+            # Apply hues
+            save_btn.Hue = self.HUE_PRIMARY
+            discard_btn.Hue = self.HUE_DANGER
+            
+            def on_save():
+                self.summary_save_clicked = True
+                if self.debug:
+                    print("[GumpManager] Summary Save clicked")
+            def on_discard():
+                self.summary_discard_clicked = True
+                if self.debug:
+                    print("[GumpManager] Summary Discard clicked")
+            
+            self.api.AddControlOnClick(save_btn, on_save)
+            self.api.AddControlOnClick(discard_btn, on_discard)
+            
+            self.api.AddGump(self.summary_gump)
+            
+            if self.logger:
+                self.logger.info("GUMP", "SUMMARY_CREATED", "Summary gump created")
+            return True
+        except Exception as e:
+            if self.debug:
+                print(f"[GumpManager] ERROR creating summary gump: {e}")
+                traceback.print_exc()
+            if self.logger:
+                self.logger.error("GUMP", "SUMMARY_ERROR", str(e), {"traceback": traceback.format_exc()})
+            return False
+    
     def cleanup(self):
         """Cleanup gumps on exit"""
         try:
@@ -1076,6 +1304,10 @@ class GumpManager:
             if self.session_gump:
                 if hasattr(self.session_gump, 'Dispose'):
                     self.session_gump.Dispose()
+            
+            if self.summary_gump:
+                if hasattr(self.summary_gump, 'Dispose'):
+                    self.summary_gump.Dispose()
             
             if self.debug:
                 print("[GumpManager] Cleanup complete")

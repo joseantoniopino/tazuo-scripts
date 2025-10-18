@@ -30,7 +30,7 @@ class SessionManager:
                     writer = csv.writer(f)
                     writer.writerow([
                         "session_id", "zone", "start_time", "end_time",
-                        "duration_minutes", "gold_gained", "deaths",
+                        "session_duration", "paused_time", "gold_gained", "deaths",
                         "insurance_cost", "net_profit", "notes",
                         "merged", "merged_from"
                     ])
@@ -77,6 +77,7 @@ class SessionManager:
             "session_id": self.next_session_id,
             "zone": zone,
             "start_time": datetime.now(),
+            "end_time": None,
             "initial_gold": initial_gold,
             "gold_looted": 0,
             "deaths": 0,
@@ -84,7 +85,8 @@ class SessionManager:
             "manual_adjustments": 0,
             "notes": "",
             "paused": False,
-            "paused_duration": 0
+            "paused_started_at": None,
+            "paused_total_seconds": 0
         }
         
         self.next_session_id += 1
@@ -121,7 +123,7 @@ class SessionManager:
             with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
                 fieldnames = [
                     "session_id", "zone", "start_time", "end_time",
-                    "duration_minutes", "gold_gained", "deaths",
+                    "session_duration", "paused_time", "gold_gained", "deaths",
                     "insurance_cost", "net_profit", "notes",
                     "merged", "merged_from"
                 ]
@@ -157,6 +159,24 @@ class SessionManager:
         if self.debug:
             print(f"[SessionManager] Updated session data: {list(kwargs.keys())}")
     
+    def toggle_pause(self):
+        """Toggle pause state and accumulate paused_total_seconds."""
+        if not self.current_session:
+            return False
+        now = datetime.now()
+        if not self.current_session.get("paused"):
+            # Start pause
+            self.current_session["paused"] = True
+            self.current_session["paused_started_at"] = now
+        else:
+            # End pause, accumulate
+            started = self.current_session.get("paused_started_at")
+            if started:
+                self.current_session["paused_total_seconds"] = int(self.current_session.get("paused_total_seconds", 0) or 0) + int((now - started).total_seconds())
+            self.current_session["paused"] = False
+            self.current_session["paused_started_at"] = None
+        return self.current_session["paused"]
+    
     def auto_save(self):
         """Auto-save current session to CSV (called periodically)"""
         if not self.current_session:
@@ -183,7 +203,7 @@ class SessionManager:
             with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
                 fieldnames = [
                     "session_id", "zone", "start_time", "end_time",
-                    "duration_minutes", "gold_gained", "deaths",
+                    "session_duration", "paused_time", "gold_gained", "deaths",
                     "insurance_cost", "net_profit", "notes",
                     "merged", "merged_from"
                 ]
@@ -219,6 +239,8 @@ class SessionManager:
         
         try:
             session_id = self.current_session["session_id"]
+            # Fix end_time at finalization
+            self.current_session["end_time"] = datetime.now()
             
             # Read existing rows
             rows = []
@@ -242,7 +264,7 @@ class SessionManager:
             with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
                 fieldnames = [
                     "session_id", "zone", "start_time", "end_time",
-                    "duration_minutes", "gold_gained", "deaths",
+                    "session_duration", "paused_time", "gold_gained", "deaths",
                     "insurance_cost", "net_profit", "notes",
                     "merged", "merged_from"
                 ]
@@ -294,7 +316,7 @@ class SessionManager:
             with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
                 fieldnames = [
                     "session_id", "zone", "start_time", "end_time",
-                    "duration_minutes", "gold_gained", "deaths",
+                    "session_duration", "paused_time", "gold_gained", "deaths",
                     "insurance_cost", "net_profit", "notes",
                     "merged", "merged_from"
                 ]
@@ -321,23 +343,105 @@ class SessionManager:
                 self.logger.error("SESSION_MGR", "DELETE_SESSION_ERROR", str(e), {
                     "traceback": traceback.format_exc()
                 })
-    
-    def _format_session_for_csv(self, ongoing=True):
-        """Format current session data for CSV row"""
-        session = self.current_session
         
-        # Calculate end time and duration
+    def mark_finished_now(self, finish_dt=None):
+        """Fix end_time at the moment of Finish click and persist final row.
+        Does not clear current_session (allows Save/Discard flow)."""
+        if not self.current_session:
+            return
+        try:
+            session_id = self.current_session["session_id"]
+            # Fix end_time
+            from datetime import datetime as _dt
+            end_dt = finish_dt or _dt.now()
+            self.current_session["end_time"] = end_dt
+            
+            # Read existing rows
+            rows = []
+            if os.path.exists(self.csv_file):
+                with open(self.csv_file, "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    rows = list(reader)
+            
+            # Update or append final session data
+            session_found = False
+            for row in rows:
+                if int(row["session_id"]) == session_id:
+                    row.update(self._format_session_for_csv(ongoing=False))
+                    session_found = True
+                    break
+            if not session_found:
+                rows.append(self._format_session_for_csv(ongoing=False))
+            
+            # Write back
+            with open(self.csv_file, "w", newline="", encoding="utf-8") as f:
+                fieldnames = [
+                    "session_id", "zone", "start_time", "end_time",
+                    "session_duration", "paused_time", "gold_gained", "deaths",
+                    "insurance_cost", "net_profit", "notes",
+                    "merged", "merged_from"
+                ]
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+            
+            if self.debug:
+                print(f"[SessionManager] Marked session #{session_id} finished at {end_dt}")
+            if self.logger:
+                self.logger.info("SESSION_MGR", "MARK_FINISHED", f"Session #{session_id} marked finished", {
+                    "end_time": end_dt.strftime("%Y-%m-%d %H:%M:%S")
+                })
+        except Exception as e:
+            if self.debug:
+                print(f"[SessionManager] ERROR marking finished: {e}")
+                traceback.print_exc()
+            if self.logger:
+                self.logger.error("SESSION_MGR", "MARK_FINISHED_ERROR", str(e), {
+                    "traceback": traceback.format_exc()
+                })
+        
+    def clear_current_session(self):
+        """Clear session from memory without modifying CSV (used after Save)."""
+        if not self.current_session:
+            return
+        if self.debug:
+            print(f"[SessionManager] Clearing current session #{self.current_session['session_id']} from memory")
+        self.current_session = None
+        if self.logger:
+            self.logger.info("SESSION_MGR", "SESSION_CLEARED", "Cleared current session from memory")
+        
+    def _format_session_for_csv(self, ongoing=True):
+        """Format current session data for CSV row, including pause-aware duration."""
+        session = self.current_session
+        if not session:
+            return {}
+        
+        start_time = session["start_time"]
         if ongoing:
             end_time = datetime.now()
             end_time_str = ""
         else:
-            end_time = session.get("end_time", datetime.now())
+            end_time = session.get("end_time") or datetime.now()
             end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
         
-        duration_seconds = (end_time - session["start_time"]).total_seconds()
-        duration_minutes = int(duration_seconds / 60)
+        # Compute paused seconds up to end_time
+        paused_seconds = int(session.get("paused_total_seconds", 0) or 0)
+        if session.get("paused") and session.get("paused_started_at"):
+            paused_seconds += int((end_time - session["paused_started_at"]).total_seconds())
         
-        # Calculate totals
+        # Effective duration
+        total_seconds = max(0, int((end_time - start_time).total_seconds()) - paused_seconds)
+        
+        def fmt_hms(sec: int) -> str:
+            h = sec // 3600
+            m = (sec % 3600) // 60
+            s = sec % 60
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        
+        session_duration = fmt_hms(total_seconds)
+        paused_time = fmt_hms(paused_seconds)
+        
+        # Totals
         gold_gained = session["gold_looted"] + session["manual_adjustments"]
         total_insurance = session["deaths"] * session["insurance_cost"]
         net_profit = gold_gained - total_insurance
@@ -345,9 +449,10 @@ class SessionManager:
         return {
             "session_id": session["session_id"],
             "zone": session["zone"],
-            "start_time": session["start_time"].strftime("%Y-%m-%d %H:%M:%S"),
+            "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": end_time_str,
-            "duration_minutes": duration_minutes,
+            "session_duration": session_duration,
+            "paused_time": paused_time,
             "gold_gained": gold_gained,
             "deaths": session["deaths"],
             "insurance_cost": total_insurance,
@@ -358,12 +463,16 @@ class SessionManager:
         }
     
     def _get_duration_minutes(self):
-        """Get current session duration in minutes"""
+        """Get current session duration in minutes (pause-aware)."""
         if not self.current_session:
             return 0
-        
-        duration_seconds = (datetime.now() - self.current_session["start_time"]).total_seconds()
-        return int(duration_seconds / 60)
+        now = datetime.now()
+        start = self.current_session["start_time"]
+        paused = int(self.current_session.get("paused_total_seconds", 0) or 0)
+        if self.current_session.get("paused") and self.current_session.get("paused_started_at"):
+            paused += int((now - self.current_session["paused_started_at"]).total_seconds())
+        effective_seconds = max(0, int((now - start).total_seconds()) - paused)
+        return int(effective_seconds / 60)
     
     def _calculate_net_profit(self):
         """Calculate current net profit"""
@@ -374,23 +483,39 @@ class SessionManager:
         total_insurance = self.current_session["deaths"] * self.current_session["insurance_cost"]
         return gold_gained - total_insurance
     
-    def get_session_data(self):
-        """Get current session data for display"""
+    def get_session_data(self, now_override=None):
+        """Get current session data for display (pause-aware).
+        Optionally provide now_override (datetime) to freeze the snapshot time."""
         if not self.current_session:
             return None
+        now = now_override or datetime.now()
+        start = self.current_session["start_time"]
+        paused_seconds = int(self.current_session.get("paused_total_seconds", 0) or 0)
+        if self.current_session.get("paused") and self.current_session.get("paused_started_at"):
+            paused_seconds += int((now - self.current_session["paused_started_at"]).total_seconds())
+        effective_seconds = max(0, int((now - start).total_seconds()) - paused_seconds)
         
-        duration_seconds = (datetime.now() - self.current_session["start_time"]).total_seconds()
+        def fmt_hms(sec: int) -> str:
+            h = sec // 3600
+            m = (sec % 3600) // 60
+            s = sec % 60
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        
         gold_gained = self.current_session["gold_looted"] + self.current_session["manual_adjustments"]
         total_insurance = self.current_session["deaths"] * self.current_session["insurance_cost"]
         net_profit = gold_gained - total_insurance
         
         return {
             "zone": self.current_session["zone"],
-            "duration_seconds": int(duration_seconds),
+            "duration_seconds": int(effective_seconds),
             "gold_looted": self.current_session["gold_looted"],
             "gold_gained": gold_gained,
             "deaths": self.current_session["deaths"],
             "insurance_cost": total_insurance,
             "net_profit": net_profit,
-            "paused": self.current_session["paused"]
+            "paused": self.current_session["paused"],
+            "paused_time_str": fmt_hms(paused_seconds),
+            "session_duration_str": fmt_hms(effective_seconds),
+            "start_time_str": start.strftime("%Y-%m-%d %H:%M:%S"),
+            "end_time_preview_str": now.strftime("%Y-%m-%d %H:%M:%S")
         }

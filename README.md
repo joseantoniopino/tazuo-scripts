@@ -15,7 +15,7 @@ A collection of automation scripts for **TazUO** (Ultima Online client). These s
 ## 📦 Available Scripts
 
 ### 🪙 [GoldTracker](GoldTracker/) - Economy Tracking System
-**Version:** 1.0.0-alpha
+**Version:** 0.10.0-beta
 
 Track your farming efficiency across different zones. Monitor gold gains, deaths, insurance costs, and calculate net profit per session with a real-time dynamic gump display.
 
@@ -97,9 +97,10 @@ Automates the tedious entrance at Tomb of Kings. No more manually pulling 12 lev
    - Gump shows real-time gold, deaths, net profit
    - **Pause** button to freeze tracking temporarily
    - **Minimize (-)** button for compact view
-5. **Stop Session:**
-   - Click **Stop** when finished
-   - Session data saved to CSV file
+5. **Finish & Summary:**
+   - Click **Finish** when you're done
+   - A Summary gump appears with **Save** (keep record) or **Discard** (remove record)
+   - The session end time is fixed at Finish and shown in the Summary
 
 📖 [Detailed GoldTracker Guide](GoldTracker/README.md)
 
@@ -306,3 +307,16 @@ Free to use for personal gameplay. Not for commercial distribution.
 **Last Updated:** October 14, 2025  
 **Repository Version:** 1.0.0  
 **Available Scripts:** 2
+
+
+---
+
+## 🎨 Shared UI Theme (Optional)
+
+A small, reusable theme module lives at `public/ui_theme.py`. It provides a consistent palette (hex colors) and UO hues for labels/buttons, plus helpers for header/background/separator colors.
+
+- Optional: scripts work without it (they fall back to safe defaults).
+- Reusable: import it from any script to unify colors.
+- Configurable: you can create `public/ui_theme.json` to override palette/hues (not auto-created).
+
+Read the short guide: [docs/ui_theme.md](../docs/ui_theme.md)

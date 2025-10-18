@@ -44,15 +44,15 @@ The script will:
 2. **Detect all levers** - Paints usable ones **green**
 3. **Wait for you** to walk near levers
 4. **Auto-pull levers** when you're adjacent (1 tile away)
-5. **Mark used levers** - Changes to **red** after pulled
-6. **Detect flames** - After all 12 levers pulled, Flames appear
+5. **Track used levers** internally (no recolor)
+6. **Detect flames—** After all 12 levers pulled, Flames appear
 7. **Auto-speak phrases:**
    - Flame of Order → Says "Ord"
    - Flame of Chaos → Says "Anord"
-8. **Stop automatically** - Script ends when both flames activated
+8. **Stop automatically** Script ends when both flames activated
 
 ### 4. Enter Dungeon
-Once script stops, the entrance is open. Walk in and enjoy!
+Once a script stops, the entrance is open. Walk in and enjoy!
 
 ---
 
@@ -80,8 +80,7 @@ On first run, the script will create a `config.json` file in this folder with de
   "debug": false,
   "use_distance": 1,
   "detection_range": 25,
-  "hue_green": 68,
-  "hue_red": 33
+  "hue_green": 68
 }
 ```
 
@@ -145,7 +144,7 @@ When debug mode is enabled:
 
 **Solutions:**
 1. Stand **directly adjacent** to lever (diagonal counts)
-2. Check if lever turned red (already used)
+2. Check if the lever is no longer green (already used)
 3. Enable debug mode and check "DISTANCE_CHECK" events
 
 ---

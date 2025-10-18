@@ -285,7 +285,7 @@ class GoldTracker:
     def get_default_config(self):
         """Get default configuration"""
         return {
-            "version": "0.9.0-beta",
+            "version": "0.10.0-beta",
             "gold_graphic_id": 3821,
             "update_interval_seconds": 5,
             "autosave_interval_seconds": 60,
@@ -320,9 +320,47 @@ class GoldTracker:
                     
                     # Check button states (using flags set by callbacks)
                     if self.gump_mgr.stop_button_clicked:
-                        self.logger.info("MAIN", "STOP_CLICKED", "Stop button clicked")
-                        self.stop_requested = True
-                        break
+                        self.logger.info("MAIN", "FINISH_CLICKED", "Finish button clicked - opening summary")
+                        self.gump_mgr.stop_button_clicked = False
+                        finish_dt = datetime.now()
+                        self.session_mgr.mark_finished_now(finish_dt)
+                        session_data = self.session_mgr.get_session_data(now_override=finish_dt)
+                        if session_data:
+                            # Close active session gump before showing summary
+                            self.gump_mgr.close_active_session_gump()
+                            self.paused = True
+                            self.gump_mgr.create_summary_gump(session_data)
+                            # Wait for user action on summary
+                            while not API.StopRequested:
+                                API.ProcessCallbacks()
+                                if self.gump_mgr.summary_save_clicked:
+                                    self.logger.info("MAIN", "SUMMARY_SAVED", "User saved session from summary")
+                                    try:
+                                        if self.gump_mgr.summary_gump and hasattr(self.gump_mgr.summary_gump, 'Dispose'):
+                                            self.gump_mgr.summary_gump.Dispose()
+                                    except:
+                                        pass
+                                    self.gump_mgr.summary_gump = None
+                                    self.gump_mgr.summary_save_clicked = False
+                                    # Session already finalized and written at Finish
+                                    self.session_mgr.clear_current_session()
+                                    self.stop_requested = True
+                                    break
+                                if self.gump_mgr.summary_discard_clicked:
+                                    self.logger.info("MAIN", "SUMMARY_DISCARDED", "User discarded session from summary")
+                                    try:
+                                        if self.gump_mgr.summary_gump and hasattr(self.gump_mgr.summary_gump, 'Dispose'):
+                                            self.gump_mgr.summary_gump.Dispose()
+                                    except:
+                                        pass
+                                    self.gump_mgr.summary_gump = None
+                                    self.gump_mgr.summary_discard_clicked = False
+                                    self.session_mgr.delete_current_session()
+                                    self.stop_requested = True
+                                    break
+                                API.Pause(0.1)
+                        if self.stop_requested:
+                            break
                     
                     if self.gump_mgr.cancel_button_clicked:
                         self.logger.info("MAIN", "CANCEL_CLICKED", "Cancel button clicked - deleting session")
@@ -331,7 +369,8 @@ class GoldTracker:
                         break
                     
                     if self.gump_mgr.pause_button_clicked:
-                        self.paused = not self.paused
+                        paused_now = self.session_mgr.toggle_pause()
+                        self.paused = paused_now
                         self.logger.info("MAIN", "PAUSE_TOGGLED", f"Paused: {self.paused}")
                         self.gump_mgr.pause_button_clicked = False  # Reset flag
                     
@@ -348,8 +387,11 @@ class GoldTracker:
                     # Check if gump was closed and recreate if needed
                     self.gump_mgr.recreate_session_gump_if_closed()
                     
-                    # Skip tracking if paused
+                    # Skip tracking if paused (but keep UI blinking updated)
                     if self.paused:
+                        session_data = self.session_mgr.get_session_data()
+                        if session_data:
+                            self.gump_mgr.update_session_gump(session_data)
                         API.Pause(0.25)
                         continue
                     

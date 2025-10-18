@@ -1,6 +1,7 @@
 # GoldTracker - Economy Tracking Script
 
-**Version:** 1.0.0-alpha  
+**Version:** 0.10.0-beta  
+**Status:** Beta
 **Author:** Foruno  
 **For:** TazUO (Ultima Online)
 
@@ -18,13 +19,15 @@ GoldTracker is an economy tracking script that monitors your farming efficiency 
 - ✅ Automatic gold detection in backpack
 - ✅ Death detection with insurance cost deduction
 - ✅ Zone management with alias support
-- ✅ Real-time dynamic gump display with pause/resume
-- ✅ CSV export for session analysis
+- ✅ Real-time dynamic gump with Pause/Resume toggle (blinking timer when paused)
+- ✅ Finish → Summary with Save/Discard (end time fixed at Finish)
+- ✅ CSV export with session_duration and paused_time (HH:MM:SS)
 - ✅ Auto-save every 60 seconds
 - ✅ Handles gold deposits (doesn't count as loss)
 - ✅ Dynamic zone filtering with search-as-you-type
-- ✅ Minimize/restore gump functionality
+- ✅ Minimize/restore gump; mini gump shows gold and duration
 - ✅ Gump auto-reopens if accidentally closed
+- ✅ Themed UI (shared ui_theme) with colored buttons (Primary/Success/Danger/Warning)
 
 ---
 
@@ -108,23 +111,26 @@ The script tracks automatically:
 - **Duration** updated every 5 seconds
 
 **Session Gump Features:**
-- **Minimize button (-)** - Collapse to mini gump (top-right corner)
-- **Expand button (+)** - Restore full gump from mini view
-- **Pause button** - Freeze tracking temporarily
-- **Resume button** - Continue tracking after pause
-- **Stop button** - End session and save data
+- **Minimize (-)** and **Expand (+)** between full/mini views
+- **Pause/Resume** toggle button (green)
+- **Apply** manual adjustment (yellow)
+- **Finish** (blue) opens summary to Save or Discard
+- **Cancel** (red) deletes current session immediately
 
 **Gump Auto-Reopen:**
 - If you accidentally close the session gump (right-click), it will automatically reappear
 - Both mini and full gumps auto-reopen if closed
 - Gump position is preserved
 
-### 5. Stop Session
+### 5. Finish & Summary
 
-Click **Stop** button when finished:
-- Session data saved to `sessions.csv`
-- Gump closes
-- Script ends
+Click **Finish** when you are done farming:
+- The session end time is fixed immediately and written to `sessions.csv`
+- The active session gump closes and a Summary gump opens
+- In the Summary gump choose:
+  - **Save** (blue): keep the record as written
+  - **Discard** (red): delete the record from CSV
+- After Save or Discard the script ends
 
 ---
 
@@ -137,13 +143,13 @@ Click **Stop** button when finished:
 ║  GoldTracker - Active Session  [-]║
 ╠═══════════════════════════════════╣
 ║  Zone: Tomb of Kings              ║
-║  Duration: 45 min                 ║
-║  Looted: 15,320 gp                ║
+║  Duration: 00:45:00               ║
+║  Looted: +15,320 gp               ║
 ║  Deaths: 2                        ║
-║  Insurance: 18,360 gp             ║
-║  Net Profit: -3,040 gp            ║
+║  Insurance: -18,360 gp            ║
+║  NET PROFIT: -3,040 gp            ║
 ╠═══════════════════════════════════╣
-║  [Pause]  [Stop]  [Cancel]        ║
+║  [Pause/Resume] [Apply] [Finish] [Cancel]  ║
 ╚═══════════════════════════════════╝
 ```
 
@@ -166,11 +172,12 @@ Click **Stop** button when finished:
 
 ```json
 {
+    "version": "0.9.0-beta",
     "debug": false,
     "gold_graphic_id": 3821,
     "update_interval_seconds": 5,
     "auto_read_insurance_gump": true,
-    "insurance_cost": 9180,
+    "insurance_cost": 0,
     "autosave_interval_seconds": 60
 }
 ```
@@ -234,10 +241,10 @@ Click **Stop** button when finished:
 
 All sessions are saved to `sessions.csv`:
 
-| session_id | zone | start_time | end_time | duration_minutes | gold_gained | deaths | insurance_cost | net_profit | notes | merged | merged_from |
-|------------|------|------------|----------|------------------|-------------|--------|----------------|------------|-------|--------|-------------|
-| 1 | Tomb of Kings | 2025-10-14 10:14:13 | 2025-10-14 10:26:11 | 11 | 40785 | 0 | 0 | 40785 | | false | |
-| 2 | Wind | 2025-10-14 11:57:21 | 2025-10-14 11:57:52 | 0 | 0 | 0 | 0 | 0 | | false | |
+| session_id | zone | start_time | end_time | session_duration | paused_time | gold_gained | deaths | insurance_cost | net_profit | notes | merged | merged_from |
+|------------|------|------------|----------|------------------|-------------|-------------|--------|----------------|------------|-------|--------|-------------|
+| 5 | Tomb of Kings | 2025-10-17 16:53:31 | 2025-10-17 17:09:22 | 00:15:39 | 00:00:12 | 29571 | 0 | 0 | 29571 | | false | |
+| 6 | Tomb of Kings | 2025-10-17 17:09:55 | 2025-10-17 17:13:03 | 00:03:08 | 00:00:00 | 21315 | 0 | 0 | 21315 | To merge with session_id 5 | false | |
 
 **Use this data to:**
 - Calculate gold per hour by zone
@@ -351,9 +358,22 @@ Original work by Foruno for TazUO.
 ## 📚 Additional Documentation
 
 - Development notes: PLANNING.md was an initial planning document and may be outdated; use this README and CHANGELOG as the current source of truth
-- **Example files:** Check `config.json.example` and `zones.json.example` for format reference
+- Example formats are documented above. Files are auto-generated on first run; no .example files are required.
 
 ---
 
-**Last Updated:** October 16, 2025  
-**Version:** 0.9.0-beta
+**Last Updated:** October 17, 2025  
+**Version:** 0.10.0-beta
+
+
+---
+
+## 🎨 Optional UI Theme
+
+GoldTracker can use a shared theme module at `public/ui_theme.py` for consistent button hues and backgrounds. This is entirely optional:
+
+- If the theme is available, GoldTracker applies it automatically.
+- If the theme is missing, GoldTracker falls back to built‑in safe defaults.
+- You may create `public/ui_theme.json` to override palette/hues (not auto‑created).
+
+Learn more: [ui_theme.md](../ui_theme.md)
