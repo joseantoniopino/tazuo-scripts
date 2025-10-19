@@ -84,6 +84,29 @@ class GumpManager:
         
         # Finalization state (to avoid recreating session gump after Finish)
         self.finalizing = False
+
+        # Dispose handling flags (event-driven recreation)
+        self._suppress_dispose_handlers = False
+        self._zone_disposed = False
+        self._session_disposed = False
+        self._mini_disposed = False
+        self._summary_disposed = False
+        self._modal_disposed = False
+        # Public flag used by gold_tracker summary loop
+        self.summary_disposed = False
+        # Creation guard to prevent duplicate builds during race conditions
+        self._creating_session_gump = False
+
+        # Creation timestamps to avoid immediate double-creation after events
+        self._last_session_create = 0.0
+        
+        # Global suppression window to avoid any recreation races (in seconds)
+        self._recreate_suppressed_until = 0.0
+        
+        # Track created gump instances to guarantee full disposal on Finish/cleanup
+        # This protects against rare duplicate creations after minimize/expand races
+        self._session_gump_instances = []
+        self._mini_gump_instances = []
         
         if self.debug:
             print("[GumpManager] Initialized")
@@ -106,6 +129,11 @@ class GumpManager:
             gump_height = 450  # Fixed height for scrollable area
             self.zone_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
             self.zone_gump.SetRect(0, 0, gump_width, gump_height)
+            try:
+                if hasattr(self.zone_gump, 'CanCloseWithRightClick'):
+                    self.zone_gump.CanCloseWithRightClick = False
+            except Exception:
+                pass
             self.zone_gump.CenterXInViewPort()
             self.zone_gump.CenterYInViewPort()
             
@@ -165,6 +193,18 @@ class GumpManager:
             self.zone_gump.Add(instructions)
             self.controls["instructions"] = instructions
             
+            # Register dispose callback (event-driven)
+            try:
+                def _on_zone_disposed():
+                    if self._suppress_dispose_handlers:
+                        return
+                    self._zone_disposed = True
+                    if self.logger:
+                        self.logger.warning("GUMP", "ZONE_DISPOSED", "Zone selection gump disposed")
+                self.api.AddControlOnDisposed(self.zone_gump, _on_zone_disposed)
+            except Exception:
+                pass
+
             self.api.AddGump(self.zone_gump)
             
             if self.debug:
@@ -309,7 +349,19 @@ class GumpManager:
             
             # Rebuild the radio button list in scroll area (silently)
             if "scroll_area" in self.controls:
-                self.controls["scroll_area"].Clear()
+                # Safely dispose previous radio controls (no Clear() on PyScrollArea)
+                try:
+                    prev_radios = self.controls.get("zone_radios", []) or []
+                    for entry in prev_radios:
+                        try:
+                            ctrl = entry.get("control") if isinstance(entry, dict) else None
+                            if ctrl and hasattr(ctrl, "Dispose"):
+                                ctrl.Dispose()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # Reset stored radios
                 self.controls["zone_radios"] = []
                 
                 # Rebuild radio buttons
@@ -340,7 +392,7 @@ class GumpManager:
                                         self.controls["filter_input"].SetText(zone)
                                         if self.logger:
                                             self.logger.debug("GUMP", "INPUT_FILLED", f"Input filled with SetText(): {zone}")
-                                    # Try Clear + type simulation
+                                    # Try Clear + type simulation (if available)
                                     elif hasattr(self.controls["filter_input"], "Clear"):
                                         self.controls["filter_input"].Clear()
                                         # Simulate typing each character
@@ -461,6 +513,11 @@ class GumpManager:
             modal_height = 260
             modal_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
             modal_gump.SetRect(0, 0, modal_width, modal_height)
+            try:
+                if hasattr(modal_gump, 'CanCloseWithRightClick'):
+                    modal_gump.CanCloseWithRightClick = False
+            except Exception:
+                pass
             modal_gump.CenterXInViewPort()
             modal_gump.CenterYInViewPort()
             
@@ -557,6 +614,11 @@ class GumpManager:
             modal_height = 260
             modal_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
             modal_gump.SetRect(0, 0, modal_width, modal_height)
+            try:
+                if hasattr(modal_gump, 'CanCloseWithRightClick'):
+                    modal_gump.CanCloseWithRightClick = False
+            except Exception:
+                pass
             modal_gump.CenterXInViewPort()
             modal_gump.CenterYInViewPort()
             
@@ -702,13 +764,28 @@ class GumpManager:
             if self.debug:
                 print(f"[GumpManager] Creating full session gump for zone: {zone}")
             
+            # Guard against duplicate creation during this build
+            self._creating_session_gump = True
+            # Clear any stale dispose flag and mark creation time early
+            try:
+                self._session_disposed = False
+                import time as _t
+                self._last_session_create = _t.time()
+            except Exception:
+                self._last_session_create = 0.0
+            
             # ===== FULL GUMP (expanded) =====
             gump_width = 450
             gump_height = 380
-            self.session_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=True)
+            self.session_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
             self.session_gump.SetRect(0, 0, gump_width, gump_height)
+            try:
+                if hasattr(self.session_gump, 'CanCloseWithRightClick'):
+                    self.session_gump.CanCloseWithRightClick = False
+            except Exception:
+                pass
             
-            if use_stored_position and hasattr(self, 'gump_x') and hasattr(self, 'gump_y'):
+            if use_stored_position and hasattr(self, 'gump_x') and hasattr(self, 'gump_y'): 
                 # Use stored position (when expanding from minimized)
                 # gump_x, gump_y is the top-right corner, calculate top-left
                 full_x = self.gump_x - gump_width
@@ -869,8 +946,35 @@ class GumpManager:
                     print("[GumpManager] Cancel button clicked")
             self.api.AddControlOnClick(cancel_btn, on_cancel_click)
             
+            # Register dispose callback (event-driven)
+            try:
+                def _on_session_disposed():
+                    if self._suppress_dispose_handlers or self.finalizing:
+                        return
+                    self._session_disposed = True
+                    if self.logger:
+                        self.logger.warning("GUMP", "SESSION_DISPOSED", "Session gump disposed")
+                self.api.AddControlOnDisposed(self.session_gump, _on_session_disposed)
+            except Exception:
+                pass
+
             # Add full gump
             self.api.AddGump(self.session_gump)
+
+            # Track this instance to ensure it's fully closed on Finish/cleanup
+            try:
+                self._session_gump_instances.append(self.session_gump)
+                if len(self._session_gump_instances) > 5:
+                    self._session_gump_instances = self._session_gump_instances[-5:]
+            except Exception:
+                pass
+
+            # Mark creation time and clear any stale dispose flag to prevent immediate recreation
+            try:
+                self._last_session_create = time.time()
+            except Exception:
+                self._last_session_create = 0.0
+            self._session_disposed = False
             
             if self.debug:
                 print("[GumpManager] Full session gump created")
@@ -878,6 +982,8 @@ class GumpManager:
             if self.logger:
                 self.logger.info("GUMP", "SESSION_GUMP_CREATED", f"Created session gump for {zone}")
             
+            # Release creation guard
+            self._creating_session_gump = False
             return True
             
         except Exception as e:
@@ -901,8 +1007,13 @@ class GumpManager:
         mini_x = self.gump_x - mini_width
         mini_y = self.gump_y
         
-        self.mini_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=True)
+        self.mini_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
         self.mini_gump.SetRect(mini_x, mini_y, mini_width, mini_height)
+        try:
+            if hasattr(self.mini_gump, 'CanCloseWithRightClick'):
+                self.mini_gump.CanCloseWithRightClick = False
+        except Exception:
+            pass
         
         # Background
         mini_bg = self.api.CreateGumpColorBox(0.9, self.COLOR_BG)
@@ -937,7 +1048,27 @@ class GumpManager:
         self.mini_gump.Add(mini_duration)
         self.controls["mini_duration"] = mini_duration
         
+        # Register dispose callback for mini gump
+        try:
+            def _on_mini_disposed():
+                if self._suppress_dispose_handlers or self.finalizing:
+                    return
+                self._mini_disposed = True
+                if self.logger:
+                    self.logger.warning("GUMP", "MINI_DISPOSED", "Mini gump disposed")
+            self.api.AddControlOnDisposed(self.mini_gump, _on_mini_disposed)
+        except Exception:
+            pass
+        
         self.api.AddGump(self.mini_gump)
+
+        # Track this instance to ensure it's fully closed on Finish/cleanup
+        try:
+            self._mini_gump_instances.append(self.mini_gump)
+            if len(self._mini_gump_instances) > 5:
+                self._mini_gump_instances = self._mini_gump_instances[-5:]
+        except Exception:
+            pass
     
     def toggle_minimize(self):
         """Toggle between full and minimized gump"""
@@ -959,8 +1090,19 @@ class GumpManager:
                 self.gump_x = full_x + full_width  # Top-right X
                 self.gump_y = full_y                # Top-right Y
                 
-                # Dispose full
-                self.session_gump.Dispose()
+                # Suppress any recreation for a short window during transition
+                try:
+                    self._recreate_suppressed_until = time.time() + 1.0
+                except Exception:
+                    pass
+                
+                # Dispose full with suppressed handler
+                _prev = self._suppress_dispose_handlers
+                self._suppress_dispose_handlers = True
+                try:
+                    self.session_gump.Dispose()
+                finally:
+                    self._suppress_dispose_handlers = _prev
                 self.session_gump = None
                 
                 # Create and show mini (will align top-right)
@@ -978,8 +1120,19 @@ class GumpManager:
                 self.gump_x = mini_x + mini_width  # Top-right X
                 self.gump_y = mini_y                # Top-right Y
                 
-                # Dispose mini
-                self.mini_gump.Dispose()
+                # Suppress any recreation for a short window during transition
+                try:
+                    self._recreate_suppressed_until = time.time() + 1.0
+                except Exception:
+                    pass
+                
+                # Dispose mini with suppressed handler
+                _prev = self._suppress_dispose_handlers
+                self._suppress_dispose_handlers = True
+                try:
+                    self.mini_gump.Dispose()
+                finally:
+                    self._suppress_dispose_handlers = _prev
                 self.mini_gump = None
                 
                 # Recreate full at same position (use_stored_position=True)
@@ -1079,12 +1232,19 @@ class GumpManager:
             if hasattr(self.session_gump, 'IsDisposed'):
                 return not self.session_gump.IsDisposed
             
+            # Fallbacks: try GetX()/GetY() methods before accessing attributes
             try:
-                _ = self.session_gump.X
+                if hasattr(self.session_gump, 'GetX') and callable(getattr(self.session_gump, 'GetX')):
+                    _ = self.session_gump.GetX()
+                    return True
+            except Exception:
+                pass
+            try:
+                _ = getattr(self.session_gump, 'X')
                 return True
-            except:
+            except Exception:
                 return False
-        except:
+        except Exception:
             return False
     
     def is_mini_gump_open(self):
@@ -1112,8 +1272,42 @@ class GumpManager:
         if getattr(self, 'finalizing', False):
             return False
         
+        # Global suppression window (used around minimize/expand and Finish)
+        try:
+            if time.time() < getattr(self, '_recreate_suppressed_until', 0.0):
+                return False
+        except Exception:
+            pass
+        
+        # Do not recreate while we're in the middle of creating a session gump
+        if getattr(self, '_creating_session_gump', False):
+            return False
+        
+        # Cooldown after creation to prevent duplicate gumps from race conditions
+        try:
+            if time.time() - getattr(self, '_last_session_create', 0.0) < 1.0:
+                return False
+        except Exception:
+            pass
+        
         if self.minimized:
-            # Check mini gump
+            # Prefer event-driven recreation
+            if self._mini_disposed:
+                # Guard against stale dispose during creation or right after creation
+                try:
+                    if getattr(self, '_creating_session_gump', False) or (time.time() - getattr(self, '_last_session_create', 0.0) < 1.0):
+                        self._mini_disposed = False
+                        return False
+                except Exception:
+                    pass
+                self._mini_disposed = False
+                if self.logger:
+                    self.logger.warning("GUMP", "MINI_GUMP_DISPOSED", "Mini gump disposed, recreating")
+                if self.debug:
+                    print("[GumpManager] Mini gump disposed (event), recreating...")
+                self._create_mini_gump()
+                return True
+            # Fallback: polling check
             if not self.is_mini_gump_open():
                 if self.logger:
                     self.logger.warning("GUMP", "GUMP_CLOSED", "Mini gump was closed, recreating")
@@ -1125,7 +1319,24 @@ class GumpManager:
                 self._create_mini_gump()
                 return True
         else:
-            # Check full gump
+            # Prefer event-driven recreation for full gump
+            if self._session_disposed:
+                # Guard against stale dispose during creation or right after creation
+                try:
+                    if getattr(self, '_creating_session_gump', False) or (time.time() - getattr(self, '_last_session_create', 0.0) < 1.0):
+                        self._session_disposed = False
+                        return False
+                except Exception:
+                    pass
+                self._session_disposed = False
+                if self.logger:
+                    self.logger.warning("GUMP", "SESSION_GUMP_DISPOSED", "Session gump disposed, recreating")
+                if self.debug:
+                    print("[GumpManager] Session gump disposed (event), recreating...")
+                use_stored = hasattr(self, 'gump_x') and hasattr(self, 'gump_y')
+                self.create_session_gump(self.current_zone, use_stored_position=use_stored)
+                return True
+            # Fallback: polling check
             if not self.is_session_gump_open():
                 if self.logger:
                     self.logger.warning("GUMP", "GUMP_CLOSED", "Session gump was closed, recreating")
@@ -1141,27 +1352,106 @@ class GumpManager:
         return False
     
     def close_active_session_gump(self):
-        """Close active session and mini gumps and mark finalizing."""
+        """Close active session and mini gumps for summary phase.
+        Strongly enforces closure even after minimize/expand cycles:
+        - Disposes primary and inner containers
+        - Falls back to moving gumps off-screen and shrinking if dispose fails
+        - Prevents any auto-recreation by setting finalizing and clearing refs/controls
+        """
         try:
+            # Block any recreation while we close
             self.finalizing = True
-            # Dispose full session gump if exists
-            if getattr(self, 'session_gump', None):
+            # Suppress any recreation attempts for a short window during Finish transition
+            try:
+                import time as _t
+                self._recreate_suppressed_until = _t.time() + 2.0
+            except Exception:
+                pass
+            _prev = self._suppress_dispose_handlers
+            self._suppress_dispose_handlers = True
+            try:
+                # Helper to aggressively dispose/hide a gump instance
+                def _dispose_or_hide(g):
+                    try:
+                        if hasattr(g, 'Dispose'):
+                            g.Dispose()
+                    except Exception:
+                        pass
+                    try:
+                        if hasattr(g, 'Gump') and getattr(g, 'Gump'):
+                            g.Gump.Dispose()
+                    except Exception:
+                        pass
+                    # Give the client a tick
+                    try:
+                        self.api.ProcessCallbacks()
+                    except Exception:
+                        pass
+                    # If still present, push off-screen and shrink as a visual fallback
+                    try:
+                        still_here = False
+                        if hasattr(g, 'IsDisposed'):
+                            still_here = not g.IsDisposed
+                        else:
+                            try:
+                                _ = g.GetX() if hasattr(g, 'GetX') else g.X
+                                still_here = True
+                            except Exception:
+                                still_here = False
+                        if still_here:
+                            # Move far off-screen and shrink to 1x1
+                            if hasattr(g, 'SetRect'):
+                                g.SetRect(-5000, -5000, 1, 1)
+                            else:
+                                if hasattr(g, 'SetPos'):
+                                    g.SetPos(-5000, -5000)
+                                if hasattr(g, 'SetWidth'):
+                                    g.SetWidth(1)
+                                if hasattr(g, 'SetHeight'):
+                                    g.SetHeight(1)
+                    except Exception:
+                        pass
+                # Dispose full session gump if exists
+                if getattr(self, 'session_gump', None):
+                    _dispose_or_hide(self.session_gump)
+                    # Drop reference regardless to avoid updates
+                    self.session_gump = None
+                # Dispose mini gump if exists
+                if getattr(self, 'mini_gump', None):
+                    _dispose_or_hide(self.mini_gump)
+                    self.mini_gump = None
+                
+                # Aggressively close any historical/duplicate instances (race-safe)
                 try:
-                    if hasattr(self.session_gump, 'Dispose'):
-                        self.session_gump.Dispose()
-                except:
+                    for g in list(getattr(self, '_session_gump_instances', []) or []):
+                        _dispose_or_hide(g)
+                except Exception:
                     pass
-                self.session_gump = None
-            # Dispose mini gump if exists
-            if hasattr(self, 'mini_gump') and getattr(self, 'mini_gump', None):
                 try:
-                    if hasattr(self.mini_gump, 'Dispose'):
-                        self.mini_gump.Dispose()
-                except:
+                    for g in list(getattr(self, '_mini_gump_instances', []) or []):
+                        _dispose_or_hide(g)
+                except Exception:
                     pass
-                self.mini_gump = None
+                # Clear the instance registries
+                try:
+                    self._session_gump_instances = []
+                    self._mini_gump_instances = []
+                except Exception:
+                    pass
+            finally:
+                self._suppress_dispose_handlers = _prev
+            # Clear control map to avoid touching stale controls
+            try:
+                self.controls.clear()
+            except Exception:
+                pass
+            # Final callback pump
+            try:
+                self.api.ProcessCallbacks()
+            except Exception:
+                pass
             if self.logger:
-                self.logger.info("GUMP", "SESSION_GUMP_CLOSED", "Closed session gump for summary phase")
+                self.logger.info("GUMP", "SESSION_GUMP_CLOSED", "Session/mini gumps closed (or hidden) for summary phase")
         except Exception as e:
             if self.logger:
                 self.logger.error("GUMP", "SESSION_GUMP_CLOSE_ERROR", str(e), {"traceback": traceback.format_exc()})
@@ -1188,6 +1478,25 @@ class GumpManager:
         if not self.all_zones:
             return False
         
+        # Prefer event-driven recreation
+        if getattr(self, '_zone_disposed', False):
+            self._zone_disposed = False
+            if self.logger:
+                self.logger.warning("GUMP", "ZONE_GUMP_DISPOSED", "Zone selection gump disposed, recreating")
+            if self.debug:
+                print("[GumpManager] Zone selection gump disposed (event), recreating...")
+            self.create_zone_selection_gump(self.all_zones)
+            if self.last_filter_text and "filter_input" in self.controls:
+                try:
+                    self.controls["filter_input"].SetText(self.last_filter_text)
+                    if self.logger:
+                        self.logger.debug("GUMP", "FILTER_RESTORED", f"Restored filter: '{self.last_filter_text}'")
+                except Exception as e:
+                    if self.logger:
+                        self.logger.error("GUMP", "FILTER_RESTORE_FAILED", str(e))
+            return True
+        
+        # Fallback to polling if necessary
         if not self.is_zone_gump_open():
             if self.logger:
                 self.logger.warning("GUMP", "ZONE_GUMP_CLOSED", "Zone selection gump was closed, recreating")
@@ -1221,8 +1530,13 @@ class GumpManager:
             
             width = 480
             height = 320
-            self.summary_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=True)
+            self.summary_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
             self.summary_gump.SetRect(0, 0, width, height)
+            try:
+                if hasattr(self.summary_gump, 'CanCloseWithRightClick'):
+                    self.summary_gump.CanCloseWithRightClick = False
+            except Exception:
+                pass
             self.summary_gump.CenterXInViewPort()
             self.summary_gump.CenterYInViewPort()
             
@@ -1281,6 +1595,19 @@ class GumpManager:
             self.api.AddControlOnClick(save_btn, on_save)
             self.api.AddControlOnClick(discard_btn, on_discard)
             
+            # Register dispose callback for summary gump
+            try:
+                def _on_summary_disposed():
+                    if self._suppress_dispose_handlers:
+                        return
+                    self._summary_disposed = True
+                    self.summary_disposed = True
+                    if self.logger:
+                        self.logger.warning("GUMP", "SUMMARY_DISPOSED", "Summary gump disposed")
+                self.api.AddControlOnDisposed(self.summary_gump, _on_summary_disposed)
+            except Exception:
+                pass
+            
             self.api.AddGump(self.summary_gump)
             
             if self.logger:
@@ -1297,17 +1624,35 @@ class GumpManager:
     def cleanup(self):
         """Cleanup gumps on exit"""
         try:
-            if self.zone_gump:
-                if hasattr(self.zone_gump, 'Dispose'):
-                    self.zone_gump.Dispose()
-            
-            if self.session_gump:
-                if hasattr(self.session_gump, 'Dispose'):
-                    self.session_gump.Dispose()
-            
-            if self.summary_gump:
-                if hasattr(self.summary_gump, 'Dispose'):
-                    self.summary_gump.Dispose()
+            # Prevent dispose event noise/recreation during cleanup
+            _prev = self._suppress_dispose_handlers
+            self._suppress_dispose_handlers = True
+            self.finalizing = True
+            try:
+                for name in ("zone_gump", "session_gump", "summary_gump", "mini_gump"):
+                    g = getattr(self, name, None)
+                    if g:
+                        # Try direct dispose
+                        try:
+                            if hasattr(g, 'Dispose'):
+                                g.Dispose()
+                        except Exception:
+                            pass
+                        # Try inner container if available
+                        try:
+                            if hasattr(g, 'Gump') and getattr(g, 'Gump'):
+                                g.Gump.Dispose()
+                        except Exception:
+                            pass
+                        # Drop reference
+                        setattr(self, name, None)
+                # Give the client a tick to process disposals
+                try:
+                    self.api.ProcessCallbacks()
+                except Exception:
+                    pass
+            finally:
+                self._suppress_dispose_handlers = _prev
             
             if self.debug:
                 print("[GumpManager] Cleanup complete")
