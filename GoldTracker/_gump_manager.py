@@ -96,10 +96,12 @@ class GumpManager:
         self.summary_disposed = False
         # Creation guard to prevent duplicate builds during race conditions
         self._creating_session_gump = False
+        self._creating_mini_gump = False  # NEW: Guard for mini gump creation
 
         # Creation timestamps to avoid immediate double-creation after events
         self._last_session_create = 0.0
-        
+        self._last_mini_create = 0.0  # NEW: Track mini gump creation time
+
         # Global suppression window to avoid any recreation races (in seconds)
         self._recreate_suppressed_until = 0.0
         
@@ -108,6 +110,11 @@ class GumpManager:
         self._session_gump_instances = []
         self._mini_gump_instances = []
         
+        # Position tracking for minimize/expand (initialize with safe defaults)
+        self.gump_x = 0
+        self.gump_y = 0
+        self.mini_gump = None
+
         if self.debug:
             print("[GumpManager] Initialized")
     
@@ -999,87 +1006,242 @@ class GumpManager:
     
     def _create_mini_gump(self):
         """Create minimized gump"""
-        mini_width = 200
-        mini_height = 80
-        
-        # Calculate position: align top-right corner with stored position
-        # gump_x, gump_y is the top-right corner from the full gump
-        mini_x = self.gump_x - mini_width
-        mini_y = self.gump_y
-        
-        self.mini_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
-        self.mini_gump.SetRect(mini_x, mini_y, mini_width, mini_height)
         try:
-            if hasattr(self.mini_gump, 'CanCloseWithRightClick'):
-                self.mini_gump.CanCloseWithRightClick = False
-        except Exception:
-            pass
-        
-        # Background
-        mini_bg = self.api.CreateGumpColorBox(0.9, self.COLOR_BG)
-        mini_bg.SetRect(0, 0, mini_width, mini_height)
-        self.mini_gump.Add(mini_bg)
-        # Accent header bar
-        mini_header = self.api.CreateGumpColorBox(1.0, self.COLOR_HEADER)
-        mini_header.SetRect(0, 0, mini_width, 6)
-        self.mini_gump.Add(mini_header)
-        
-        # Expand button (top right)
-        expand_btn = self.api.CreateSimpleButton("+", 30, 30)
-        expand_btn.SetPos(mini_width - 40, 10)
-        self.mini_gump.Add(expand_btn)
-        expand_btn.Hue = self.HUE_PRIMARY
-        
-        def on_expand_click():
-            self.minimize_button_clicked = True
-            if self.logger:
-                self.logger.debug("GUMP", "EXPAND_CALLBACK", "Expand button callback executed")
-        self.api.AddControlOnClick(expand_btn, on_expand_click)
-        
-        # Gold amount (large)
-        mini_gold = self.api.CreateGumpLabel("0 gp", self.HUE_CYAN)
-        mini_gold.SetPos(20, 15)
-        self.mini_gump.Add(mini_gold)
-        self.controls["mini_gold"] = mini_gold
-        
-        # Duration
-        mini_duration = self.api.CreateGumpLabel("00:00:00", self.HUE_CYAN)
-        mini_duration.SetPos(20, 45)
-        self.mini_gump.Add(mini_duration)
-        self.controls["mini_duration"] = mini_duration
-        
-        # Register dispose callback for mini gump
-        try:
-            def _on_mini_disposed():
-                if self._suppress_dispose_handlers or self.finalizing:
-                    return
-                self._mini_disposed = True
-                if self.logger:
-                    self.logger.warning("GUMP", "MINI_DISPOSED", "Mini gump disposed")
-            self.api.AddControlOnDisposed(self.mini_gump, _on_mini_disposed)
-        except Exception:
-            pass
-        
-        self.api.AddGump(self.mini_gump)
+            # Set creation guard to prevent dispose-triggered recreation during build
+            self._creating_mini_gump = True
 
-        # Track this instance to ensure it's fully closed on Finish/cleanup
-        try:
-            self._mini_gump_instances.append(self.mini_gump)
-            if len(self._mini_gump_instances) > 5:
-                self._mini_gump_instances = self._mini_gump_instances[-5:]
-        except Exception:
-            pass
-    
+            if self.debug:
+                print("[GumpManager] >>> _create_mini_gump CALLED")
+
+            if self.logger:
+                self.logger.debug("GUMP", "MINI_CREATE_START", "Starting mini gump creation")
+
+            # CRITICAL: Check if mini_gump already exists before creating
+            if self.mini_gump is not None:
+                if self.debug:
+                    print(f"[GumpManager] !!! WARNING: mini_gump already exists before creation: {self.mini_gump}")
+                if self.logger:
+                    self.logger.warning("GUMP", "MINI_ALREADY_EXISTS", "mini_gump ref already exists, disposing before creating new one")
+
+                # Dispose existing mini_gump to prevent duplicate
+                try:
+                    self.mini_gump.Dispose()
+                    if self.debug:
+                        print("[GumpManager] >>> Disposed existing mini_gump before creating new one")
+                except Exception as e:
+                    if self.debug:
+                        print(f"[GumpManager] >>> Error disposing existing mini_gump: {e}")
+                finally:
+                    self.mini_gump = None
+
+            mini_width = 200
+            mini_height = 80
+
+            # Calculate position with safe defaults
+            mini_x = getattr(self, 'gump_x', 100) - mini_width
+            mini_y = getattr(self, 'gump_y', 100)
+
+            if self.debug:
+                print(f"[GumpManager] >>> Creating mini_gump at ({mini_x}, {mini_y}), size: {mini_width}x{mini_height}")
+
+            if self.logger:
+                self.logger.debug("GUMP", "MINI_POSITION", f"Mini gump position calculated", {
+                    "mini_x": mini_x,
+                    "mini_y": mini_y,
+                    "stored_gump_x": getattr(self, 'gump_x', 'N/A'),
+                    "stored_gump_y": getattr(self, 'gump_y', 'N/A')
+                })
+
+            self.mini_gump = self.api.CreateGump(acceptMouseInput=True, canMove=True, keepOpen=False)
+
+            if self.debug:
+                print(f"[GumpManager] >>> mini_gump created: {self.mini_gump}")
+
+            self.mini_gump.SetRect(mini_x, mini_y, mini_width, mini_height)
+
+            if self.debug:
+                print(f"[GumpManager] >>> SetRect called on mini_gump")
+
+            try:
+                if hasattr(self.mini_gump, 'CanCloseWithRightClick'):
+                    self.mini_gump.CanCloseWithRightClick = False
+                    if self.debug:
+                        print("[GumpManager] >>> CanCloseWithRightClick set to False")
+            except Exception:
+                pass
+
+            # Background
+            if self.debug:
+                print("[GumpManager] >>> Creating background")
+            mini_bg = self.api.CreateGumpColorBox(0.9, self.COLOR_BG)
+            mini_bg.SetRect(0, 0, mini_width, mini_height)
+            self.mini_gump.Add(mini_bg)
+
+            # Accent header bar
+            if self.debug:
+                print("[GumpManager] >>> Creating header")
+            mini_header = self.api.CreateGumpColorBox(1.0, self.COLOR_HEADER)
+            mini_header.SetRect(0, 0, mini_width, 6)
+            self.mini_gump.Add(mini_header)
+
+            # Expand button (top right)
+            if self.debug:
+                print("[GumpManager] >>> Creating expand button")
+            expand_btn = self.api.CreateSimpleButton("+", 30, 30)
+            expand_btn.SetPos(mini_width - 40, 10)
+            self.mini_gump.Add(expand_btn)
+            expand_btn.Hue = self.HUE_PRIMARY
+
+            if self.debug:
+                print("[GumpManager] >>> Registering expand button callback")
+
+            def on_expand_click():
+                if self.debug:
+                    print("[GumpManager] >>> !!! EXPAND BUTTON CLICKED (callback fired)")
+                if self.logger:
+                    self.logger.info("GUMP", "EXPAND_BTN_CLICKED", "Expand button clicked in mini gump")
+                self.toggle_minimize()
+
+            self.api.AddControlOnClick(expand_btn, on_expand_click)
+
+            if self.debug:
+                print("[GumpManager] >>> Expand button callback registered")
+
+            # Gold amount (large)
+            if self.debug:
+                print("[GumpManager] >>> Creating gold label")
+            mini_gold = self.api.CreateGumpLabel("0 gp", self.HUE_CYAN)
+            mini_gold.SetPos(20, 15)
+            self.mini_gump.Add(mini_gold)
+            self.controls["mini_gold"] = mini_gold
+
+            # Duration
+            if self.debug:
+                print("[GumpManager] >>> Creating duration label")
+            mini_duration = self.api.CreateGumpLabel("00:00:00", self.HUE_CYAN)
+            mini_duration.SetPos(20, 45)
+            self.mini_gump.Add(mini_duration)
+            self.controls["mini_duration"] = mini_duration
+
+            # Register dispose callback for mini gump
+            if self.debug:
+                print("[GumpManager] >>> Registering dispose callback")
+
+            try:
+                def _on_mini_disposed():
+                    if self.debug:
+                        print(f"[GumpManager] >>> !!! MINI GUMP DISPOSED EVENT FIRED (suppress={self._suppress_dispose_handlers}, finalizing={self.finalizing})")
+
+                    if self.logger:
+                        self.logger.warning("GUMP", "MINI_DISPOSED_EVENT", "Mini gump dispose event fired", {
+                            "suppress": self._suppress_dispose_handlers,
+                            "finalizing": self.finalizing,
+                            "minimized": self.minimized
+                        })
+
+                    if self._suppress_dispose_handlers or self.finalizing:
+                        if self.debug:
+                            print("[GumpManager] >>> Dispose event suppressed")
+                        return
+
+                    self._mini_disposed = True
+
+                    if self.logger:
+                        self.logger.warning("GUMP", "MINI_DISPOSED", "Mini gump disposed - will recreate")
+
+                self.api.AddControlOnDisposed(self.mini_gump, _on_mini_disposed)
+
+                if self.debug:
+                    print("[GumpManager] >>> Dispose callback registered successfully")
+            except Exception as e:
+                if self.debug:
+                    print(f"[GumpManager] >>> Error registering dispose callback: {e}")
+
+            if self.debug:
+                print("[GumpManager] >>> Adding mini_gump to screen")
+
+            self.api.AddGump(self.mini_gump)
+
+            if self.debug:
+                print(f"[GumpManager] >>> mini_gump added to screen: {self.mini_gump}")
+
+            # Track this instance to ensure it's fully closed on Finish/cleanup
+            try:
+                self._mini_gump_instances.append(self.mini_gump)
+                if self.debug:
+                    print(f"[GumpManager] >>> Added to instances list (total: {len(self._mini_gump_instances)})")
+                if len(self._mini_gump_instances) > 5:
+                    self._mini_gump_instances = self._mini_gump_instances[-5:]
+            except Exception:
+                pass
+
+            if self.logger:
+                self.logger.info("GUMP", "MINI_CREATE_COMPLETE", "Mini gump creation complete", {
+                    "position": (mini_x, mini_y),
+                    "size": (mini_width, mini_height),
+                    "instance_count": len(self._mini_gump_instances)
+                })
+
+            # Mark creation timestamp and clear creation guard
+            try:
+                self._last_mini_create = time.time()
+                if self.debug:
+                    print(f"[GumpManager] >>> Mini gump creation timestamp: {self._last_mini_create}")
+            except Exception:
+                self._last_mini_create = 0.0
+
+            # Clear any stale dispose flag
+            self._mini_disposed = False
+
+        except Exception as e:
+            # CRITICAL ERROR HANDLING: Log the error but don't crash
+            if self.debug:
+                print(f"[GumpManager] !!! CRITICAL ERROR in _create_mini_gump: {e}")
+                traceback.print_exc()
+
+            if self.logger:
+                self.logger.error("GUMP", "MINI_CREATE_FAILED", f"Failed to create mini gump: {e}", {
+                    "traceback": traceback.format_exc(),
+                    "gump_x": getattr(self, 'gump_x', 'N/A'),
+                    "gump_y": getattr(self, 'gump_y', 'N/A')
+                })
+
+            # Try to restore to full gump if mini creation failed
+            try:
+                if self.debug:
+                    print("[GumpManager] >>> Attempting to restore full gump after mini creation failure")
+                self.minimized = False
+                self.create_session_gump(self.current_zone, use_stored_position=False)
+            except Exception as restore_error:
+                if self.debug:
+                    print(f"[GumpManager] !!! Failed to restore full gump: {restore_error}")
+                if self.logger:
+                    self.logger.error("GUMP", "RESTORE_FAILED", f"Failed to restore full gump after mini creation failure: {restore_error}")
+        finally:
+            # Always release creation guard, even if creation failed
+            self._creating_mini_gump = False
+            if self.debug:
+                print("[GumpManager] >>> Released _creating_mini_gump guard")
+
     def toggle_minimize(self):
         """Toggle between full and minimized gump"""
         try:
+            if self.debug:
+                print(f"[GumpManager] >>> toggle_minimize CALLED, current minimized={self.minimized}")
+
             if self.logger:
                 self.logger.debug("GUMP", "MINIMIZE_START", f"Toggle minimize called, current state: {self.minimized}")
             
             self.minimized = not self.minimized
             
+            if self.debug:
+                print(f"[GumpManager] >>> State toggled to minimized={self.minimized}")
+
             if self.minimized:
                 # Minimize: dispose full, create mini
+                if self.debug:
+                    print("[GumpManager] >>> MINIMIZING (full → mini)")
+
                 if self.logger:
                     self.logger.debug("GUMP", "MINIMIZE_ACTION", "Minimizing - disposing full gump")
                 
@@ -1090,26 +1252,48 @@ class GumpManager:
                 self.gump_x = full_x + full_width  # Top-right X
                 self.gump_y = full_y                # Top-right Y
                 
+                if self.debug:
+                    print(f"[GumpManager] >>> Stored position from full gump: ({full_x}, {full_y}) → top-right: ({self.gump_x}, {self.gump_y})")
+
                 # Suppress any recreation for a short window during transition
                 try:
                     self._recreate_suppressed_until = time.time() + 1.0
+                    if self.debug:
+                        print(f"[GumpManager] >>> Recreation suppressed until {self._recreate_suppressed_until}")
                 except Exception:
                     pass
                 
                 # Dispose full with suppressed handler
+                if self.debug:
+                    print(f"[GumpManager] >>> About to dispose session_gump: {self.session_gump}")
+
                 _prev = self._suppress_dispose_handlers
                 self._suppress_dispose_handlers = True
                 try:
                     self.session_gump.Dispose()
+                    if self.debug:
+                        print("[GumpManager] >>> session_gump.Dispose() called successfully")
                 finally:
                     self._suppress_dispose_handlers = _prev
+                    if self.debug:
+                        print(f"[GumpManager] >>> Restore suppress_dispose_handlers to {_prev}")
+
                 self.session_gump = None
-                
+                if self.debug:
+                    print("[GumpManager] >>> session_gump set to None")
+
                 # Create and show mini (will align top-right)
+                if self.debug:
+                    print("[GumpManager] >>> Calling _create_mini_gump()")
                 self._create_mini_gump()
-                
+                if self.debug:
+                    print("[GumpManager] >>> _create_mini_gump() completed")
+
             else:
                 # Expand: dispose mini, recreate full
+                if self.debug:
+                    print("[GumpManager] >>> EXPANDING (mini → full)")
+
                 if self.logger:
                     self.logger.debug("GUMP", "EXPAND_ACTION", "Expanding - disposing mini gump")
                 
@@ -1120,30 +1304,52 @@ class GumpManager:
                 self.gump_x = mini_x + mini_width  # Top-right X
                 self.gump_y = mini_y                # Top-right Y
                 
+                if self.debug:
+                    print(f"[GumpManager] >>> Stored position from mini gump: ({mini_x}, {mini_y}) → top-right: ({self.gump_x}, {self.gump_y})")
+
                 # Suppress any recreation for a short window during transition
                 try:
                     self._recreate_suppressed_until = time.time() + 1.0
+                    if self.debug:
+                        print(f"[GumpManager] >>> Recreation suppressed until {self._recreate_suppressed_until}")
                 except Exception:
                     pass
                 
                 # Dispose mini with suppressed handler
+                if self.debug:
+                    print(f"[GumpManager] >>> About to dispose mini_gump: {self.mini_gump}")
+
                 _prev = self._suppress_dispose_handlers
                 self._suppress_dispose_handlers = True
                 try:
                     self.mini_gump.Dispose()
+                    if self.debug:
+                        print("[GumpManager] >>> mini_gump.Dispose() called successfully")
                 finally:
                     self._suppress_dispose_handlers = _prev
+                    if self.debug:
+                        print(f"[GumpManager] >>> Restore suppress_dispose_handlers to {_prev}")
+
                 self.mini_gump = None
-                
+                if self.debug:
+                    print("[GumpManager] >>> mini_gump set to None")
+
                 # Recreate full at same position (use_stored_position=True)
+                if self.debug:
+                    print("[GumpManager] >>> Calling create_session_gump() with stored position")
                 self.create_session_gump(self.current_zone, use_stored_position=True)
-            
+                if self.debug:
+                    print("[GumpManager] >>> create_session_gump() completed")
+
             if self.logger:
                 self.logger.info("GUMP", "MINIMIZE_TOGGLE", f"Gump {'minimized' if self.minimized else 'expanded'}")
-        
+
+            if self.debug:
+                print(f"[GumpManager] >>> toggle_minimize COMPLETED, final state minimized={self.minimized}")
+
         except Exception as e:
             if self.debug:
-                print(f"[GumpManager] ERROR toggling minimize: {e}")
+                print(f"[GumpManager] !!! ERROR toggling minimize: {e}")
                 traceback.print_exc()
             
             if self.logger:
@@ -1291,12 +1497,29 @@ class GumpManager:
             pass
         
         if self.minimized:
+            # NEW: Do not recreate while we're creating a mini gump
+            if getattr(self, '_creating_mini_gump', False):
+                if self.debug:
+                    print("[GumpManager] Skipping recreation - mini gump creation in progress")
+                return False
+
+            # NEW: Cooldown after mini gump creation to prevent dispose loop
+            try:
+                if time.time() - getattr(self, '_last_mini_create', 0.0) < 1.0:
+                    if self.debug:
+                        print(f"[GumpManager] Skipping recreation - mini cooldown active ({time.time() - getattr(self, '_last_mini_create', 0.0):.2f}s)")
+                    return False
+            except Exception:
+                pass
+
             # Prefer event-driven recreation
             if self._mini_disposed:
                 # Guard against stale dispose during creation or right after creation
                 try:
-                    if getattr(self, '_creating_session_gump', False) or (time.time() - getattr(self, '_last_session_create', 0.0) < 1.0):
+                    if getattr(self, '_creating_mini_gump', False) or (time.time() - getattr(self, '_last_mini_create', 0.0) < 1.0):
                         self._mini_disposed = False
+                        if self.debug:
+                            print("[GumpManager] Cleared stale _mini_disposed flag (cooldown active)")
                         return False
                 except Exception:
                     pass
